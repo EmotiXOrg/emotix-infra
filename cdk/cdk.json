@@ -17,6 +17,13 @@
     ]
   },
   "context": {
+    "testCertArn": "arn:aws:acm:us-east-1:836622697490:certificate/ea23394a-9c92-4676-9987-8ee73aff3996",
+    "testNs": [
+      "ns-416.awsdns-52.com",
+      "ns-1922.awsdns-48.co.uk",
+      "ns-646.awsdns-16.net",
+      "ns-1413.awsdns-48.org"
+    ],
     "@aws-cdk/aws-signer:signingProfileNamePassedToCfn": true,
     "@aws-cdk/aws-ecs-patterns:secGroupsDisablesImplicitOpenListener": true,
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,

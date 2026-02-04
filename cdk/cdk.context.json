@@ -1,0 +1,17 @@
+{
+  "acknowledged-issue-numbers": [
+    34892
+  ],
+  "hosted-zone:account=170145218709:domainName=emotix.net:region=eu-central-1": {
+    "Id": "/hostedzone/Z09296673HA5VRUS047E9",
+    "Name": "emotix.net."
+  },
+  "hosted-zone:account=836622697490:domainName=test.emotix.net:region=us-east-1": {
+    "Id": "/hostedzone/Z04263257IH6H252YBIG",
+    "Name": "test.emotix.net."
+  },
+  "hosted-zone:account=836622697490:domainName=test.emotix.net:region=eu-central-1": {
+    "Id": "/hostedzone/Z04263257IH6H252YBIG",
+    "Name": "test.emotix.net."
+  }
+}

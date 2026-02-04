@@ -1,10 +1,6 @@
 name: CDK Test - Synth
 
 on:
-  pull_request:
-    paths:
-      - "cdk/**"
-      - ".github/workflows/cdk-test-synth.yml"
   workflow_dispatch:
 
 permissions:

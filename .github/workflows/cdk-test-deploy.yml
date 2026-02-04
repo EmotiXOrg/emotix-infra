@@ -1,11 +1,6 @@
 name: CDK Test - Deploy
 
 on:
-  push:
-    branches: [ "main" ]
-    paths:
-      - "cdk/**"
-      - ".github/workflows/cdk-test-deploy.yml"
   workflow_dispatch:
 
 permissions:
