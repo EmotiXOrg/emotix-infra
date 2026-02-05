@@ -1,20 +1,23 @@
 import * as cdk from "aws-cdk-lib";
 import { TestDnsStack } from "../lib/test-dns-stack";
 import { ManagementDnsStack } from "../lib/management-dns-stack";
-import { CertStack } from "../lib/cert-stack";
+import { CertStack } from "../lib/global/cert-stack";
 import { WebStack } from "../lib/web-stack";
+import { BillingGuardrailsStack } from "../lib/global/billing-guardrails-stack";
 
 const app = new cdk.App();
 
-const MGMT_ID = "170145218709";
-const TEST_ID = "836622697490";
+const MGMT_ACCOUNT_ID = "170145218709";
+const PROD_ACCOUNT_ID = "328984697027";
+const TEST_ACCOUNT_ID = "836622697490";
+const AWS_MGMT_EMAIL = "aws-management@emotix.net";
 
 const EU_CENTRAL_1_REGION = "eu-central-1";
 const US_EAST_1_REGION = "us-east-1";
 
 // 1) Test DNS zone stack
 new TestDnsStack(app, "EmotixTestDnsStack", {
-  env: { account: TEST_ID, region: EU_CENTRAL_1_REGION },
+  env: { account: TEST_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
 });
 
 // 2) Management delegation stack
@@ -22,14 +25,14 @@ new TestDnsStack(app, "EmotixTestDnsStack", {
 const delegatedNs = (app.node.tryGetContext("testNs") as string[] | undefined) ?? [];
 
 new ManagementDnsStack(app, "EmotixManagementDnsStack", {
-  env: { account: MGMT_ID, region: EU_CENTRAL_1_REGION },
+  env: { account: MGMT_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
   parentZoneName: "emotix.net",
   delegatedSubdomain: "test.emotix.net",
   delegatedNameServers: delegatedNs,
 });
 
 new CertStack(app, "EmotixTestCertStack", {
-  env: { account: TEST_ID, region: US_EAST_1_REGION },
+  env: { account: TEST_ACCOUNT_ID, region: US_EAST_1_REGION },
   zoneName: "test.emotix.net",
   domainName: "test.emotix.net",
 });
@@ -40,7 +43,7 @@ if (!testCertArn) {
 }
 
 new WebStack(app, "EmotixTestWebStack", {
-  env: { account: TEST_ID, region: EU_CENTRAL_1_REGION },
+  env: { account: TEST_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
   domainName: "test.emotix.net",
   zoneName: "test.emotix.net",
   certificateArn: testCertArn,
@@ -69,4 +72,21 @@ new WebStack(app, "EmotixProdWebStack", {
 });
 
 */
+
+new BillingGuardrailsStack(app, "BillingGuardrailsStack", {
+  env: {
+    account: MGMT_ACCOUNT_ID,
+    region: US_EAST_1_REGION,
+  },
+
+  notificationEmail: AWS_MGMT_EMAIL,
+  testAccountId: TEST_ACCOUNT_ID,
+  prodAccountId: PROD_ACCOUNT_ID,
+
+  testMonthlyBudgetUsd: 1,
+  prodMonthlyBudgetUsd: 1,
+  alertThresholdsPercent: [25, 50, 80, 100],
+
+  attachScpToAccounts: true,
+});
 
