@@ -16,10 +16,10 @@ export interface BillingGuardrailsStackProps extends cdk.StackProps {
     testMonthlyBudgetUsd?: number; // default 1
     prodMonthlyBudgetUsd?: number; // default 1
 
-    alertThresholdsPercent?: number[]; // default [50, 80, 100]
+    alertThresholdsPercent?: number[]; // default [20, 50, 80, 100]
     attachScpToAccounts?: boolean; // default true
+    defaultAnomalyMonitorArn?: string; // optional: use existing AWS-managed monitor
 }
-
 
 /**
  * BillingGuardrailsStack
@@ -48,7 +48,6 @@ export class BillingGuardrailsStack extends cdk.Stack {
         assertBudget(testLimit, "test");
         assertBudget(prodLimit, "prod");
 
-
         // Central SNS topic for budgets + anomalies
         const alertsTopic = new sns.Topic(this, "BillingAlertsTopic", {
             displayName: "Billing Alerts (Budgets + Anomalies)",
@@ -74,13 +73,13 @@ export class BillingGuardrailsStack extends cdk.Stack {
             }));
         };
 
-        // ===== Budgets: TEST ($1/month) =====
+        // ===== Budgets: TEST =====
         new budgets.CfnBudget(this, "TestAccountMonthlyBudget", {
             budget: {
                 budgetName: `test-monthly-actual-${testLimit}usd`,
                 budgetType: "COST",
                 timeUnit: "MONTHLY",
-                budgetLimit: { amount: testLimit, unit: "USD" },
+                budgetLimit: { amount: testLimit, unit: "USD" }, // keep number as requested
                 costFilters: {
                     LinkedAccount: [props.testAccountId],
                 },
@@ -88,13 +87,13 @@ export class BillingGuardrailsStack extends cdk.Stack {
             notificationsWithSubscribers: buildNotifications(),
         });
 
-        // ===== Budgets: PROD ($1/month) =====
+        // ===== Budgets: PROD =====
         new budgets.CfnBudget(this, "ProdAccountMonthlyBudget", {
             budget: {
                 budgetName: `prod-monthly-actual-${prodLimit}usd`,
                 budgetType: "COST",
                 timeUnit: "MONTHLY",
-                budgetLimit: { amount: prodLimit, unit: "USD" },
+                budgetLimit: { amount: prodLimit, unit: "USD" }, // keep number as requested
                 costFilters: {
                     LinkedAccount: [props.prodAccountId],
                 },
@@ -103,99 +102,80 @@ export class BillingGuardrailsStack extends cdk.Stack {
         });
 
         // ===== Cost Anomaly Detection =====
-        // Monitor anomalies by SERVICE (org-wide visibility in payer account)
-        const anomalyMonitor = new ce.CfnAnomalyMonitor(this, "OrgServiceAnomalyMonitor", {
-            monitorName: "org-service-anomalies",
-            monitorType: "DIMENSIONAL",
-            monitorDimension: "SERVICE",
-        });
+        // Some accounts already have AWS-managed Default-Services-Monitor.
+        // Creating another SERVICE monitor can fail with AlreadyExists.
+        // If defaultAnomalyMonitorArn is provided, we only create a subscription for it.
 
-        // Subscription: daily anomalies -> SNS + email
+        let monitorArnToUse: string;
+
+        if (props.defaultAnomalyMonitorArn && props.defaultAnomalyMonitorArn.trim().length > 0) {
+            monitorArnToUse = props.defaultAnomalyMonitorArn.trim();
+        } else {
+            const anomalyMonitor = new ce.CfnAnomalyMonitor(this, "OrgServiceAnomalyMonitor", {
+                monitorName: `org-service-anomalies`,
+                monitorType: "DIMENSIONAL",
+                monitorDimension: "SERVICE",
+            });
+
+            monitorArnToUse = anomalyMonitor.attrMonitorArn;
+        }
+
         new ce.CfnAnomalySubscription(this, "OrgAnomalySubscription", {
-            subscriptionName: "org-anomalies-to-sns",
+            subscriptionName: `org-anomalies-email`,
             frequency: "DAILY",
-            monitorArnList: [anomalyMonitor.attrMonitorArn],
+            monitorArnList: [monitorArnToUse],
             subscribers: [
-                { type: "SNS", address: alertsTopic.topicArn },
                 { type: "EMAIL", address: props.notificationEmail },
             ],
-            threshold: 1, // USD absolute anomaly threshold
+            threshold: 1, // USD
         });
 
+
         // ===== SCP: Deny expensive services =====
-        // IMPORTANT:
-        // - SCPs are "guardrails": they deny actions even if IAM allows them.
-        // - This policy is intentionally conservative: it blocks common cost bombs.
-        //
-        // You can loosen it later as you scale, or maintain different SCPs per OU.
         const denyExpensiveServicesPolicyDoc = {
             Version: "2012-10-17",
             Statement: [
-                // --- Networking cost bombs ---
                 {
-                    Sid: "DenyNatGateways",
+                    Sid: "DenyNatGatewaysAndEipOps",
                     Effect: "Deny",
                     Action: [
                         "ec2:CreateNatGateway",
                         "ec2:DeleteNatGateway",
-                        "ec2:AllocateAddress", // EIP can cost if unused/attached patterns
+                        "ec2:AllocateAddress",
                         "ec2:AssociateAddress",
                     ],
                     Resource: "*",
                 },
-
-                // --- Managed databases / data warehouses / caches ---
                 {
                     Sid: "DenyRdsRedshiftElastiCache",
                     Effect: "Deny",
                     Action: ["rds:*", "redshift:*", "elasticache:*", "neptune:*", "timestream:*"],
                     Resource: "*",
                 },
-
-                // --- Search/analytics clusters & big compute platforms ---
                 {
                     Sid: "DenyOpenSearchAndBigData",
                     Effect: "Deny",
-                    Action: [
-                        "es:*", // OpenSearch / legacy ES
-                        "emr:*",
-                        "athena:CreateWorkGroup",
-                        "glue:*",
-                        "databrew:*",
-                    ],
+                    Action: ["es:*", "emr:*", "athena:CreateWorkGroup", "glue:*", "databrew:*"],
                     Resource: "*",
                 },
-
-                // --- ML / expensive managed compute ---
                 {
-                    Sid: "DenySageMaker",
+                    Sid: "DenySageMakerAndBedrock",
                     Effect: "Deny",
                     Action: ["sagemaker:*", "bedrock:*"],
                     Resource: "*",
                 },
-
-                // --- Kubernetes control plane costs ---
                 {
                     Sid: "DenyEKS",
                     Effect: "Deny",
                     Action: ["eks:*"],
                     Resource: "*",
                 },
-
-                // --- Marketplace (avoid paid AMIs/subscriptions by mistake) ---
                 {
                     Sid: "DenyMarketplace",
                     Effect: "Deny",
-                    Action: [
-                        "aws-marketplace:*",
-                        "aws-marketplace-management:*",
-                        "pricing:*", // optional; remove if you rely on Pricing API
-                    ],
+                    Action: ["aws-marketplace:*", "aws-marketplace-management:*", "pricing:*"],
                     Resource: "*",
                 },
-
-                // --- Restrict EC2 instance types to keep within cheap/free patterns ---
-                // Allows only the listed instance types; everything else is denied.
                 {
                     Sid: "DenyEC2NonAllowlistedInstanceTypes",
                     Effect: "Deny",
@@ -203,19 +183,12 @@ export class BillingGuardrailsStack extends cdk.Stack {
                     Resource: "*",
                     Condition: {
                         StringNotEquals: {
-                            "ec2:InstanceType": [
-                                "t3.micro",
-                                "t4g.micro",
-                                "t3.nano",
-                                "t4g.nano",
-                            ],
+                            "ec2:InstanceType": ["t3.micro", "t4g.micro", "t3.nano", "t4g.nano"],
                         },
                     },
                 },
-
-                // --- Optional: block creating large EBS volumes (common hidden cost) ---
                 {
-                    Sid: "DenyLargeEbsVolumes",
+                    Sid: "DenyLargeEbsVolumesOver30GiB",
                     Effect: "Deny",
                     Action: ["ec2:CreateVolume"],
                     Resource: "*",
@@ -228,32 +201,16 @@ export class BillingGuardrailsStack extends cdk.Stack {
             ],
         };
 
+        // CloudFormation does NOT support AWS::Organizations::PolicyAttachment.
+        // Attach SCP via targetIds directly on AWS::Organizations::Policy.
         const scp = new org.CfnPolicy(this, "DenyExpensiveServicesSCP", {
             name: "DenyExpensiveServices",
             description:
                 "Guardrail SCP to prevent common high-cost services and restrict EC2 instance types.",
             type: "SERVICE_CONTROL_POLICY",
             content: denyExpensiveServicesPolicyDoc as any,
+            targetIds: attachScp ? [props.testAccountId, props.prodAccountId] : undefined,
         });
-
-        if (attachScp) {
-            // Attach to TEST and PROD accounts directly (simple & safe for now).
-            new cdk.CfnResource(this, "AttachScpToTestAccount", {
-                type: "AWS::Organizations::PolicyAttachment",
-                properties: {
-                    PolicyId: scp.attrId,
-                    TargetId: props.testAccountId,
-                },
-            });
-
-            new cdk.CfnResource(this, "AttachScpToProdAccount", {
-                type: "AWS::Organizations::PolicyAttachment",
-                properties: {
-                    PolicyId: scp.attrId,
-                    TargetId: props.prodAccountId,
-                },
-            });
-        }
 
         new cdk.CfnOutput(this, "BillingAlertsTopicArn", { value: alertsTopic.topicArn });
         new cdk.CfnOutput(this, "DenyExpensiveServicesScpId", { value: scp.attrId });

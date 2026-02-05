@@ -4,16 +4,9 @@ import { ManagementDnsStack } from "../lib/management-dns-stack";
 import { CertStack } from "../lib/global/cert-stack";
 import { WebStack } from "../lib/web-stack";
 import { BillingGuardrailsStack } from "../lib/global/billing-guardrails-stack";
+import { AWS_MGMT_EMAIL, EU_CENTRAL_1_REGION, MGMT_ACCOUNT_ID, PROD_ACCOUNT_ID, TEST_ACCOUNT_ID, US_EAST_1_REGION } from "../constants";
 
 const app = new cdk.App();
-
-const MGMT_ACCOUNT_ID = "170145218709";
-const PROD_ACCOUNT_ID = "328984697027";
-const TEST_ACCOUNT_ID = "836622697490";
-const AWS_MGMT_EMAIL = "aws-management@emotix.net";
-
-const EU_CENTRAL_1_REGION = "eu-central-1";
-const US_EAST_1_REGION = "us-east-1";
 
 // 1) Test DNS zone stack
 new TestDnsStack(app, "EmotixTestDnsStack", {
@@ -88,5 +81,6 @@ new BillingGuardrailsStack(app, "BillingGuardrailsStack", {
   alertThresholdsPercent: [25, 50, 80, 100],
 
   attachScpToAccounts: true,
+  defaultAnomalyMonitorArn: "arn:aws:ce::170145218709:anomalymonitor/dda76256-5e70-499e-bba1-ce1b01af265c",
 });
 
