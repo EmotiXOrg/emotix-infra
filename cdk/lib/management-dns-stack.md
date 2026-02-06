@@ -116,7 +116,7 @@ v=DKIM1; k=rsa; p=...
 ### DMARC Policy
 
 ```
-v=DMARC1; p=none; pct=50; rua=mailto:dmarc@emotix.net; ruf=mailto:dmarc@emotix.net; sp=none; adkim=r; aspf=r
+v=DMARC1; p=none; rua=mailto:dmarc@emotix.net; ruf=mailto:dmarc@emotix.net; sp=none; adkim=r; aspf=r
 ```
 
 ---
