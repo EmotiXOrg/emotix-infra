@@ -22,6 +22,28 @@ new ManagementDnsStack(app, "EmotixManagementDnsStack", {
   parentZoneName: "emotix.net",
   delegatedSubdomain: "test.emotix.net",
   delegatedNameServers: delegatedNs,
+  mxRecords: [
+    {
+      hostName: "mx.zoho.eu",
+      priority: 10
+    },
+    {
+      hostName: "mx2.zoho.eu",
+      priority: 20
+    },
+    {
+      hostName: "mx3.zoho.eu",
+      priority: 50
+    },
+  ],
+  spfValue: "v=spf1 include:zohomail.eu ~all",
+  dmarcValue: "v=DMARC1; p=none; rua=mailto:dmarc@emotix.net; ruf=mailto:dmarc@emotix.net; sp=none; adkim=r; aspf=r; pct=50",
+  dkimTxts: [
+    {
+      name: "zmail._domainkey",
+      value: "v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCntmhjaDxeIJ8cStbbkqHdY/j6B2E5MPaNE7EA+AsD5LSXfgloBfwzHlGIY5CmVvxUZjay8Ybm7eWjt7FTlmV2sevWMUnlEoQcIffvQ/3OidQsgYdosZv/+dUERmDPPD4ZYCi5elFBpgQXrvG6K7w4OHP0UETa67OG3G0FTdGRXwIDAQAB"
+    }
+  ]
 });
 
 new CertStack(app, "EmotixTestCertStack", {
