@@ -37,51 +37,6 @@ Only the Management account is allowed to modify root DNS and email-related reco
 
 ---
 
-## DNS & Email Architecture Diagram
-
-```mermaid
-flowchart TB
-  subgraph Internet["Public Internet / DNS Resolvers"]
-    R[DNS Resolver]
-  end
-
-  subgraph Management["AWS Management Account - Route53 Hosted Zone: emotix.net"]
-    PZ[(Hosted Zone: emotix.net)]
-
-    NSRec["NS delegation: test.emotix.net → Test NS"]
-    MXRec["MX records: mx.zoho.eu (10), mx2.zoho.eu (20), mx3.zoho.eu (50)"]
-    SPFRec["TXT SPF: v=spf1 include:zohomail.eu ~all"]
-    DKIMRec["TXT DKIM: zmail._domainkey"]
-    DMARCRec["TXT DMARC: _dmarc"]
-
-    PZ --> NSRec
-    PZ --> MXRec
-    PZ --> SPFRec
-    PZ --> DKIMRec
-    PZ --> DMARCRec
-  end
-
-  subgraph Test["AWS Test Account - Route53 Hosted Zone: test.emotix.net"]
-    TZ[(Hosted Zone: test.emotix.net)]
-  end
-
-  subgraph Zoho["Zoho Mail (EU)"]
-    ZMX["Inbound mail servers"]
-    ZSend["Outbound mail signing"]
-    ZReports["DMARC reports"]
-  end
-
-  R --> PZ
-  PZ --> TZ
-
-  MXRec --> ZMX
-  SPFRec --> ZSend
-  DKIMRec --> ZSend
-  DMARCRec --> ZReports
-```
-
----
-
 ## Hosted Zones
 
 ### Root Hosted Zone — emotix.net
