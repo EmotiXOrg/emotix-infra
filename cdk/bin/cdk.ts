@@ -98,8 +98,8 @@ new BillingGuardrailsStack(app, "BillingGuardrailsStack", {
   testAccountId: TEST_ACCOUNT_ID,
   prodAccountId: PROD_ACCOUNT_ID,
 
-  testMonthlyBudgetUsd: 1,
-  prodMonthlyBudgetUsd: 1,
+  testMonthlyBudgetUsd: 3,
+  prodMonthlyBudgetUsd: 3,
   alertThresholdsPercent: [25, 50, 80, 100],
 
   attachScpToAccounts: true,
