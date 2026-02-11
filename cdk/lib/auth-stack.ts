@@ -122,7 +122,7 @@ export class AuthStack extends cdk.Stack {
             userPool,
             clientId: facebookAppId,
             clientSecret: facebookAppSecret,
-            scopes: ["public_profile", "email"],
+            scopes: ["public_profile", "email", "user_birthday"],
             attributeMapping: {
                 email: cognito.ProviderAttribute.FACEBOOK_EMAIL,
                 givenName: cognito.ProviderAttribute.FACEBOOK_FIRST_NAME,
