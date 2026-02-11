@@ -5,6 +5,7 @@ import { CertStack } from "../lib/global/cert-stack";
 import { WebStack } from "../lib/web-stack";
 import { BillingGuardrailsStack } from "../lib/global/billing-guardrails-stack";
 import { AWS_MGMT_EMAIL, EU_CENTRAL_1_REGION, MGMT_ACCOUNT_ID, PROD_ACCOUNT_ID, TEST_ACCOUNT_ID, US_EAST_1_REGION } from "../constants";
+import { AuthStack } from "../lib/auth-stack";
 
 const app = new cdk.App();
 
@@ -50,6 +51,7 @@ new CertStack(app, "EmotixTestCertStack", {
   env: { account: TEST_ACCOUNT_ID, region: US_EAST_1_REGION },
   zoneName: "test.emotix.net",
   domainName: "test.emotix.net",
+  authDomainName: "auth.test.emotix.net"
 });
 
 const testCertArn = app.node.tryGetContext("testCertArn") as string;
@@ -105,4 +107,27 @@ new BillingGuardrailsStack(app, "BillingGuardrailsStack", {
   attachScpToAccounts: true,
   defaultAnomalyMonitorArn: "arn:aws:ce::170145218709:anomalymonitor/dda76256-5e70-499e-bba1-ce1b01af265c",
 });
+
+const authTestCertArn = app.node.tryGetContext("authTestCertArn") as string;
+if (!authTestCertArn) {
+  throw new Error("Missing context.authTestCertArn in cdk.json");
+}
+
+new AuthStack(app, "EmotixTestAuthStack", {
+  env: { account: TEST_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
+
+  zoneName: "test.emotix.net",
+  authDomainName: "auth.test.emotix.net",
+  authCertificateArn: authTestCertArn,
+
+  callbackUrls: ["https://test.emotix.net/auth/callback"],
+  logoutUrls: ["https://test.emotix.net/logout"],
+
+  // SSM paths (you said they are already filled)
+  googleClientIdParam: "/emotix/test/auth/google/client-id",
+  googleClientSecretParam: "/emotix/test/auth/google/client-secret",
+  facebookAppIdParam: "/emotix/test/auth/facebook/app-id",
+  facebookAppSecretParam: "/emotix/test/auth/facebook/app-secret",
+});
+
 

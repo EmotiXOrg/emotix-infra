@@ -6,6 +6,7 @@ import * as route53 from "aws-cdk-lib/aws-route53";
 interface CertStackProps extends cdk.StackProps {
     zoneName: string;
     domainName: string;
+    authDomainName: string;
 }
 
 export class CertStack extends cdk.Stack {
@@ -21,6 +22,14 @@ export class CertStack extends cdk.Stack {
             validation: acm.CertificateValidation.fromDns(zone),
         });
 
+        const authCert = new acm.Certificate(this, "AuthDomainCert", {
+            domainName: props.authDomainName,
+            validation: acm.CertificateValidation.fromDns(zone),
+        });
+
+        new cdk.CfnOutput(this, "AuthDomainCertArn", {
+            value: authCert.certificateArn,
+        });
         new cdk.CfnOutput(this, "CertificateArn", {
             value: cert.certificateArn,
         });

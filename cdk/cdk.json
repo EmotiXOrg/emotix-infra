@@ -17,6 +17,7 @@
     ]
   },
   "context": {
+    "authTestCertArn": "arn:aws:acm:us-east-1:836622697490:certificate/7fe474b6-f8b5-4787-ac02-0778366fb073",
     "testCertArn": "arn:aws:acm:us-east-1:836622697490:certificate/ea23394a-9c92-4676-9987-8ee73aff3996",
     "testNs": [
       "ns-416.awsdns-52.com",
