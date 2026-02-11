@@ -7,6 +7,7 @@ import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as route53 from "aws-cdk-lib/aws-route53";
 import * as targets from "aws-cdk-lib/aws-route53-targets";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
+import { createSpaRouterFunction } from "./cloudfront/spa-router-function";
 
 export interface WebStackProps extends cdk.StackProps {
     // DNS / TLS
@@ -146,11 +147,18 @@ export class WebStack extends cdk.Stack {
          * - optional WAF
          * - optional access logging
          */
+        const spaRouterFn = createSpaRouterFunction(this);
         const distribution = new cloudfront.Distribution(this, "Distribution", {
             defaultBehavior: {
                 origin: origins.S3BucketOrigin.withOriginAccessControl(siteBucket),
                 viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                 responseHeadersPolicy: securityHeadersPolicy,
+                functionAssociations: [
+                    {
+                        function: spaRouterFn,
+                        eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+                    },
+                ],
             },
 
             domainNames: [props.domainName],
