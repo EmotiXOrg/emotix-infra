@@ -1,10 +1,10 @@
 import * as cdk from "aws-cdk-lib";
 import { TestDnsStack } from "../lib/test-dns-stack";
 import { ManagementDnsStack } from "../lib/management-dns-stack";
-import { CertStack } from "../lib/global/cert-stack";
+import { TlsCertStack } from "../lib/global/tls-cert-stack";
 import { WebStack } from "../lib/web-stack";
 import { BillingGuardrailsStack } from "../lib/global/billing-guardrails-stack";
-import { AWS_MGMT_EMAIL, EU_CENTRAL_1_REGION, MGMT_ACCOUNT_ID, PROD_ACCOUNT_ID, TEST_ACCOUNT_ID, US_EAST_1_REGION } from "../constants";
+import { AWS_MGMT_EMAIL, DOMAINS, EU_CENTRAL_1_REGION, MAIN_DOMAIN, MGMT_ACCOUNT_ID, PROD_ACCOUNT_ID, TEST_ACCOUNT_ID, US_EAST_1_REGION } from "../constants";
 import { AuthStack } from "../lib/auth-stack";
 
 const app = new cdk.App();
@@ -20,8 +20,8 @@ const delegatedNs = (app.node.tryGetContext("testNs") as string[] | undefined) ?
 
 new ManagementDnsStack(app, "EmotixManagementDnsStack", {
   env: { account: MGMT_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
-  parentZoneName: "emotix.net",
-  delegatedSubdomain: "test.emotix.net",
+  parentZoneName: MAIN_DOMAIN,
+  delegatedSubdomain: DOMAINS.TEST,
   delegatedNameServers: delegatedNs,
   mxRecords: [
     {
@@ -47,23 +47,33 @@ new ManagementDnsStack(app, "EmotixManagementDnsStack", {
   ]
 });
 
-new CertStack(app, "EmotixTestCertStack", {
+// Global/Edge cert (required for CloudFront + Cognito custom domain, and other worldwide services)
+export const emotixTestGlobalCert = new TlsCertStack(app, "EmotixTestGlobalCertStack", {
   env: { account: TEST_ACCOUNT_ID, region: US_EAST_1_REGION },
-  zoneName: "test.emotix.net",
-  domainName: "test.emotix.net",
-  authDomainName: "auth.test.emotix.net"
+  zoneName: DOMAINS.TEST,
+  baseDomainName: DOMAINS.TEST,
+  retainOnDelete: true,
 });
 
-const testCertArn = app.node.tryGetContext("testCertArn") as string;
-if (!testCertArn) {
-  throw new Error("Missing context.testCertArn in cdk.json");
+// Regional cert (required for API Gateway regional domains + ALB in region, and other regional services)
+export const emotixTestRegionalCert = new TlsCertStack(app, "EmotixTestRegionalCertStack", {
+  env: { account: TEST_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
+  zoneName: DOMAINS.TEST,
+  baseDomainName: DOMAINS.TEST,
+  retainOnDelete: true,
+});
+
+
+const globalCertArn = app.node.tryGetContext("globalTestTlsCertArn") as string;
+if (!globalCertArn) {
+  throw new Error("Missing context.globalTestTlsCertArn in cdk.json");
 }
 
 new WebStack(app, "EmotixTestWebStack", {
   env: { account: TEST_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
-  domainName: "test.emotix.net",
-  zoneName: "test.emotix.net",
-  certificateArn: testCertArn,
+  domainName: DOMAINS.TEST,
+  zoneName: DOMAINS.TEST,
+  certificateArn: globalCertArn,
 });
 
 /*
@@ -108,20 +118,15 @@ new BillingGuardrailsStack(app, "BillingGuardrailsStack", {
   defaultAnomalyMonitorArn: "arn:aws:ce::170145218709:anomalymonitor/dda76256-5e70-499e-bba1-ce1b01af265c",
 });
 
-const authTestCertArn = app.node.tryGetContext("authTestCertArn") as string;
-if (!authTestCertArn) {
-  throw new Error("Missing context.authTestCertArn in cdk.json");
-}
-
 new AuthStack(app, "EmotixTestAuthStack", {
   env: { account: TEST_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
 
-  zoneName: "test.emotix.net",
-  authDomainName: "auth.test.emotix.net",
-  authCertificateArn: authTestCertArn,
+  zoneName: DOMAINS.TEST,
+  authDomainName: "auth." + DOMAINS.TEST,
+  authCertificateArn: globalCertArn,
 
-  callbackUrls: ["https://test.emotix.net/auth/callback"],
-  logoutUrls: ["https://test.emotix.net/logout"],
+  callbackUrls: ["https://" + DOMAINS.TEST + "/auth/callback"],
+  logoutUrls: ["https://" + DOMAINS.TEST + "/logout"],
 
   // SSM paths (you said they are already filled)
   googleClientIdParam: "/emotix/test/auth/google/client-id",
