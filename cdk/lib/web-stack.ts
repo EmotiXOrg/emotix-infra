@@ -199,6 +199,9 @@ export class WebStack extends cdk.Stack {
         /**
          * 7) Outputs
          */
+        new cdk.CfnOutput(this, "CloudFrontDistributionId", {
+            value: distribution.distributionId,
+        });
         new cdk.CfnOutput(this, "CloudFrontDomainName", { value: distribution.domainName });
         new cdk.CfnOutput(this, "BucketName", { value: siteBucket.bucketName });
     }

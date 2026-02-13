@@ -6,6 +6,7 @@ import { WebStack } from "../lib/web-stack";
 import { BillingGuardrailsStack } from "../lib/global/billing-guardrails-stack";
 import { AWS_MGMT_EMAIL, DOMAINS, EU_CENTRAL_1_REGION, MAIN_DOMAIN, MGMT_ACCOUNT_ID, PROD_ACCOUNT_ID, TEST_ACCOUNT_ID, US_EAST_1_REGION } from "../constants";
 import { AuthStack } from "../lib/auth-stack";
+import { StaticAssetsStack } from "../lib/static-assets-stack";
 
 const app = new cdk.App();
 
@@ -76,29 +77,13 @@ new WebStack(app, "EmotixTestWebStack", {
   certificateArn: globalCertArn,
 });
 
-/*
+new StaticAssetsStack(app, "EmotixTestStaticAssetsStack", {
+  env: { account: TEST_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
 
-const testCertArn = app.node.tryGetContext("prodCertArn") as string;
-if (!prodCertArn) {
-  throw new Error("Missing context.prodCertArn in cdk.json");
-}
-
-new WebStack(app, "EmotixProdWebStack", {
-  env: { account: PROD_ID, region: EU_CENTRAL_1_REGION },
-  domainName: "emotix.net",
-  zoneName: "emotix.net",
-  certificateArn: prodCertArn,
-
-  removalPolicy: cdk.RemovalPolicy.RETAIN,
-  autoDeleteObjects: false,
-
-  enableLogging: true,
-  logBucketNamePrefix: "emotix-prod",
-
-  webAclArn: "arn:aws:wafv2:us-east-1:PROD_ID:global/webacl/....", // пример
+  zoneName: DOMAINS.TEST, // "emotix.net"
+  staticDomainName: `static.${DOMAINS.TEST}`, // "static.test.emotix.net"
+  globalCertArnUsEast1: globalCertArn,
 });
-
-*/
 
 new BillingGuardrailsStack(app, "BillingGuardrailsStack", {
   env: {
