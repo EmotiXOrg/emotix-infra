@@ -4,6 +4,7 @@ import * as path from "node:path";
 
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as cognito from "aws-cdk-lib/aws-cognito";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -173,6 +174,33 @@ export class AuthStack extends cdk.Stack {
         authAuditLogTable.grantWriteData(postConfirmationFn);
 
         /**
+         * Baseline auth trigger alarms for rollout visibility.
+         */
+        const preSignUpErrorsAlarm = new cloudwatch.Alarm(this, "PreSignUpTriggerErrorsAlarm", {
+            metric: preSignUpExternalProviderFn.metricErrors({
+                period: cdk.Duration.minutes(5),
+                statistic: "sum",
+            }),
+            threshold: 1,
+            evaluationPeriods: 1,
+            datapointsToAlarm: 1,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarmDescription: "Pre-signup external provider trigger returned errors.",
+        });
+
+        const postConfirmationErrorsAlarm = new cloudwatch.Alarm(this, "PostConfirmationTriggerErrorsAlarm", {
+            metric: postConfirmationFn.metricErrors({
+                period: cdk.Duration.minutes(5),
+                statistic: "sum",
+            }),
+            threshold: 1,
+            evaluationPeriods: 1,
+            datapointsToAlarm: 1,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarmDescription: "Post-confirmation trigger returned errors.",
+        });
+
+        /**
          * 2) Read IdP secrets from SSM Parameter Store (Standard tier)
          */
         // Non-secret values (String) – this is fine
@@ -313,6 +341,8 @@ export class AuthStack extends cdk.Stack {
         new cdk.CfnOutput(this, "UsersTableName", { value: this.usersTableName });
         new cdk.CfnOutput(this, "UserAuthMethodsTableName", { value: this.userAuthMethodsTableName });
         new cdk.CfnOutput(this, "AuthAuditLogTableName", { value: this.authAuditLogTableName });
+        new cdk.CfnOutput(this, "PreSignUpTriggerErrorsAlarmName", { value: preSignUpErrorsAlarm.alarmName });
+        new cdk.CfnOutput(this, "PostConfirmationTriggerErrorsAlarmName", { value: postConfirmationErrorsAlarm.alarmName });
         new cdk.CfnOutput(this, "Region", { value: cdk.Stack.of(this).region });
     }
 }

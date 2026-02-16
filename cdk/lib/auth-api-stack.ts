@@ -7,6 +7,7 @@ import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import * as authorizers from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import * as integrations from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import * as cognito from "aws-cdk-lib/aws-cognito";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
@@ -187,9 +188,49 @@ export class AuthApiStack extends cdk.Stack {
             ),
         });
 
+        /**
+         * Baseline API/handler alarms.
+         */
+        const discoverErrorsAlarm = new cloudwatch.Alarm(this, "DiscoverAuthFnErrorsAlarm", {
+            metric: discoverFn.metricErrors({ period: cdk.Duration.minutes(5), statistic: "sum" }),
+            threshold: 1,
+            evaluationPeriods: 1,
+            datapointsToAlarm: 1,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarmDescription: "Discover auth Lambda errors.",
+        });
+        const setPasswordErrorsAlarm = new cloudwatch.Alarm(this, "SetPasswordAuthFnErrorsAlarm", {
+            metric: setPasswordFn.metricErrors({ period: cdk.Duration.minutes(5), statistic: "sum" }),
+            threshold: 1,
+            evaluationPeriods: 1,
+            datapointsToAlarm: 1,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarmDescription: "Set-password Lambda errors.",
+        });
+        const methodsErrorsAlarm = new cloudwatch.Alarm(this, "GetMethodsAuthFnErrorsAlarm", {
+            metric: methodsFn.metricErrors({ period: cdk.Duration.minutes(5), statistic: "sum" }),
+            threshold: 1,
+            evaluationPeriods: 1,
+            datapointsToAlarm: 1,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarmDescription: "Get-methods Lambda errors.",
+        });
+        const api5xxAlarm = new cloudwatch.Alarm(this, "AuthApi5xxAlarm", {
+            metric: httpApi.metricServerError({ period: cdk.Duration.minutes(5), statistic: "sum" }),
+            threshold: 5,
+            evaluationPeriods: 1,
+            datapointsToAlarm: 1,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarmDescription: "Auth API 5xx responses exceeded threshold.",
+        });
+
         this.apiBaseUrl = `https://${props.apiDomainName}`;
 
         new cdk.CfnOutput(this, "AuthApiBaseUrl", { value: this.apiBaseUrl });
         new cdk.CfnOutput(this, "AuthHttpApiId", { value: httpApi.httpApiId });
+        new cdk.CfnOutput(this, "DiscoverAuthFnErrorsAlarmName", { value: discoverErrorsAlarm.alarmName });
+        new cdk.CfnOutput(this, "SetPasswordAuthFnErrorsAlarmName", { value: setPasswordErrorsAlarm.alarmName });
+        new cdk.CfnOutput(this, "GetMethodsAuthFnErrorsAlarmName", { value: methodsErrorsAlarm.alarmName });
+        new cdk.CfnOutput(this, "AuthApi5xxAlarmName", { value: api5xxAlarm.alarmName });
     }
 }

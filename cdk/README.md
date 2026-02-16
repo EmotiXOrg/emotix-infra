@@ -36,6 +36,12 @@ Deployment sequence for auth flow changes:
 1. Deploy `EmotixTestAuthStack` (identity foundations, triggers, tables)
 2. Deploy `EmotixTestAuthApiStack` (API routes and domain mapping)
 
+## Operations (Step 5)
+
+- CloudWatch alarms are defined for trigger/API Lambda errors and API 5xx response spikes.
+- Detailed rollout and monitoring checklist:
+  - `docs/auth-rollout-runbook.md`
+
 ## Useful commands
 
 * `npm run build`   compile typescript to js
