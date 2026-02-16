@@ -19,6 +19,23 @@ This folder defines AWS infrastructure stacks for EmotiX.
   - `user_auth_methods` style table (`pk`, `sk`)
   - `auth_audit_log` style table (`pk`, `sk`)
 
+## Auth API (Step 3)
+
+`lib/auth-api-stack.ts` provisions:
+
+- HTTP API Gateway with custom domain `api.<env-domain>`
+- Lambda endpoints:
+  - `POST /auth/discover` (public)
+  - `POST /auth/set-password` (Cognito JWT required)
+  - `GET /auth/methods` (Cognito JWT required)
+- Cognito user pool authorizer for protected routes
+- Route53 A/AAAA alias records for API custom domain
+
+Deployment sequence for auth flow changes:
+
+1. Deploy `EmotixTestAuthStack` (identity foundations, triggers, tables)
+2. Deploy `EmotixTestAuthApiStack` (API routes and domain mapping)
+
 ## Useful commands
 
 * `npm run build`   compile typescript to js

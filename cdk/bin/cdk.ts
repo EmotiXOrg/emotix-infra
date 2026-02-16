@@ -6,6 +6,7 @@ import { WebStack } from "../lib/web-stack";
 import { BillingGuardrailsStack } from "../lib/global/billing-guardrails-stack";
 import { AWS_MGMT_EMAIL, DOMAINS, EU_CENTRAL_1_REGION, MAIN_DOMAIN, MGMT_ACCOUNT_ID, PROD_ACCOUNT_ID, TEST_ACCOUNT_ID, US_EAST_1_REGION } from "../constants";
 import { AuthStack } from "../lib/auth-stack";
+import { AuthApiStack } from "../lib/auth-api-stack";
 import { StaticAssetsStack } from "../lib/static-assets-stack";
 
 const app = new cdk.App();
@@ -69,6 +70,10 @@ const globalCertArn = app.node.tryGetContext("globalTestTlsCertArn") as string;
 if (!globalCertArn) {
   throw new Error("Missing context.globalTestTlsCertArn in cdk.json");
 }
+const regionalCertArn = app.node.tryGetContext("regionalTestTlsCertArn") as string;
+if (!regionalCertArn) {
+  throw new Error("Missing context.regionalTestTlsCertArn in cdk.json");
+}
 
 new WebStack(app, "EmotixTestWebStack", {
   env: { account: TEST_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
@@ -103,7 +108,7 @@ new BillingGuardrailsStack(app, "BillingGuardrailsStack", {
   defaultAnomalyMonitorArn: "arn:aws:ce::170145218709:anomalymonitor/dda76256-5e70-499e-bba1-ce1b01af265c",
 });
 
-new AuthStack(app, "EmotixTestAuthStack", {
+const authStack = new AuthStack(app, "EmotixTestAuthStack", {
   env: { account: TEST_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
 
   zoneName: DOMAINS.TEST,
@@ -123,4 +128,17 @@ new AuthStack(app, "EmotixTestAuthStack", {
   facebookAppSecretParam: "/emotix/test/auth/facebook/app-secret",
 });
 
+new AuthApiStack(app, "EmotixTestAuthApiStack", {
+  env: { account: TEST_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
 
+  zoneName: DOMAINS.TEST,
+  apiDomainName: "api." + DOMAINS.TEST,
+  regionalCertificateArn: regionalCertArn,
+  allowedOrigins: ["https://" + DOMAINS.TEST],
+
+  userPoolId: authStack.userPoolId,
+  userPoolClientId: authStack.userPoolClientId,
+  usersTableName: authStack.usersTableName,
+  userAuthMethodsTableName: authStack.userAuthMethodsTableName,
+  authAuditLogTableName: authStack.authAuditLogTableName,
+});
