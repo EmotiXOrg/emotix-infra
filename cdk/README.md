@@ -1,8 +1,23 @@
-# Welcome to your CDK TypeScript project
+# EmotiX CDK (Infrastructure)
 
-This is a blank project for CDK development with TypeScript.
+This folder defines AWS infrastructure stacks for EmotiX.
 
-The `cdk.json` file tells the CDK Toolkit how to execute your app.
+## Auth Identity Foundations (Step 2)
+
+`lib/auth-stack.ts` now provisions:
+
+- Cognito User Pool with Google/Facebook Hosted UI
+- Lambda trigger: `PreSignUp_ExternalProvider`
+  - Links external provider to existing Cognito user by normalized verified email
+  - Uses `AdminLinkProviderForUser`
+- Lambda trigger: `PostConfirmation`
+  - Creates profile metadata seed in DynamoDB
+  - Stores native auth method seed (`METHOD#COGNITO`)
+  - Writes auth audit event
+- DynamoDB tables:
+  - `users` style table (`pk`)
+  - `user_auth_methods` style table (`pk`, `sk`)
+  - `auth_audit_log` style table (`pk`, `sk`)
 
 ## Useful commands
 

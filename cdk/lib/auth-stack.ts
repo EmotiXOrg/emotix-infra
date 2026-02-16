@@ -1,8 +1,12 @@
 import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
+import * as path from "node:path";
 
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as cognito from "aws-cdk-lib/aws-cognito";
+import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as iam from "aws-cdk-lib/aws-iam";
+import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as route53 from "aws-cdk-lib/aws-route53";
 import * as targets from "aws-cdk-lib/aws-route53-targets";
 import * as ssm from "aws-cdk-lib/aws-ssm";
@@ -35,6 +39,9 @@ export class AuthStack extends cdk.Stack {
     public readonly userPoolId: string;
     public readonly userPoolClientId: string;
     public readonly authDomain: string;
+    public readonly usersTableName: string;
+    public readonly userAuthMethodsTableName: string;
+    public readonly authAuditLogTableName: string;
 
     constructor(scope: Construct, id: string, props: AuthStackProps) {
         super(scope, id, props);
@@ -47,6 +54,56 @@ export class AuthStack extends cdk.Stack {
         });
 
         /**
+         * Identity metadata and audit tables.
+         * Cognito remains the source of truth for identities; tables are for profile/auth metadata.
+         */
+        const usersTable = new dynamodb.Table(this, "UsersTable", {
+            partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
+            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+            pointInTimeRecovery: true,
+            removalPolicy: cdk.RemovalPolicy.DESTROY, // TEST-friendly; override in PROD later
+        });
+
+        const userAuthMethodsTable = new dynamodb.Table(this, "UserAuthMethodsTable", {
+            partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
+            sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
+            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+            pointInTimeRecovery: true,
+            removalPolicy: cdk.RemovalPolicy.DESTROY, // TEST-friendly; override in PROD later
+        });
+
+        const authAuditLogTable = new dynamodb.Table(this, "AuthAuditLogTable", {
+            partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
+            sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
+            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+            pointInTimeRecovery: true,
+            removalPolicy: cdk.RemovalPolicy.DESTROY, // TEST-friendly; override in PROD later
+        });
+
+        const preSignUpExternalProviderFn = new lambda.Function(this, "PreSignUpExternalProviderFn", {
+            runtime: lambda.Runtime.PYTHON_3_12,
+            handler: "index.handler",
+            code: lambda.Code.fromAsset(path.join(__dirname, "..", "lambda", "auth-triggers", "pre-signup")),
+            timeout: cdk.Duration.seconds(10),
+            environment: {
+                LOG_LEVEL: "INFO",
+            },
+        });
+
+        const postConfirmationFn = new lambda.Function(this, "PostConfirmationFn", {
+            runtime: lambda.Runtime.PYTHON_3_12,
+            handler: "index.handler",
+            code: lambda.Code.fromAsset(path.join(__dirname, "..", "lambda", "auth-triggers", "post-confirmation")),
+            timeout: cdk.Duration.seconds(10),
+            environment: {
+                USERS_TABLE_NAME: usersTable.tableName,
+                USER_AUTH_METHODS_TABLE_NAME: userAuthMethodsTable.tableName,
+                AUTH_AUDIT_LOG_TABLE_NAME: authAuditLogTable.tableName,
+                LOG_LEVEL: "INFO",
+            },
+        });
+
+        /**
          * 1) Cognito User Pool
          * - Email sign-in
          * - Self-signup enabled for MVP (you can disable later)
@@ -54,12 +111,33 @@ export class AuthStack extends cdk.Stack {
          */
         const userPool = new cognito.UserPool(this, "UserPool", {
             userPoolName: `${id}-user-pool`,
+
+            // Email login
             signInAliases: { email: true },
+
+            // Self registration
             selfSignUpEnabled: true,
+
+            // Email verification
             autoVerify: { email: true },
+
+            // Make email mandatory
             standardAttributes: {
                 email: { required: true, mutable: true },
+                // optionally add givenName/familyName later if you want
             },
+
+            // Verification / confirmation email templates
+            userVerification: {
+                emailStyle: cognito.VerificationEmailStyle.CODE, // OTP flow
+                emailSubject: "EmotiX — confirm your email",
+                emailBody:
+                    "Your EmotiX verification code is {####}. If you didn’t request this, ignore this email.",
+            },
+
+            // Optional: keep MFA off for MVP
+            mfa: cognito.Mfa.OFF,
+
             passwordPolicy: {
                 minLength: 10,
                 requireDigits: true,
@@ -68,9 +146,32 @@ export class AuthStack extends cdk.Stack {
                 requireSymbols: false,
                 tempPasswordValidity: cdk.Duration.days(7),
             },
+
+            // Forgot password uses this (email-only recovery is perfect for your case)
             accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+
             removalPolicy: cdk.RemovalPolicy.DESTROY, // TEST-friendly; override for PROD
+            lambdaTriggers: {
+                preSignUp: preSignUpExternalProviderFn,
+                postConfirmation: postConfirmationFn,
+            },
         });
+
+        preSignUpExternalProviderFn.addToRolePolicy(
+            new iam.PolicyStatement({
+                sid: "PreSignUpIdentityLinking",
+                actions: [
+                    "cognito-idp:ListUsers",
+                    "cognito-idp:AdminLinkProviderForUser",
+                ],
+                resources: [userPool.userPoolArn],
+            })
+        );
+        preSignUpExternalProviderFn.addEnvironment("USER_POOL_ID", userPool.userPoolId);
+
+        usersTable.grantWriteData(postConfirmationFn);
+        userAuthMethodsTable.grantWriteData(postConfirmationFn);
+        authAuditLogTable.grantWriteData(postConfirmationFn);
 
         /**
          * 2) Read IdP secrets from SSM Parameter Store (Standard tier)
@@ -168,7 +269,7 @@ export class AuthStack extends cdk.Stack {
 
         /**
          * 5) Custom auth domain (auth.test.emotix.net)
-         * Cert MUST be in the SAME REGION as the user pool (eu-central-1).
+         * Cert MUST be in us-east-1 for Cognito custom domains.
          */
         const authCert = acm.Certificate.fromCertificateArn(
             this,
@@ -203,10 +304,16 @@ export class AuthStack extends cdk.Stack {
         this.userPoolId = userPool.userPoolId;
         this.userPoolClientId = userPoolClient.userPoolClientId;
         this.authDomain = `https://${props.authDomainName}`;
+        this.usersTableName = usersTable.tableName;
+        this.userAuthMethodsTableName = userAuthMethodsTable.tableName;
+        this.authAuditLogTableName = authAuditLogTable.tableName;
 
         new cdk.CfnOutput(this, "UserPoolId", { value: this.userPoolId });
         new cdk.CfnOutput(this, "UserPoolClientId", { value: this.userPoolClientId });
         new cdk.CfnOutput(this, "AuthDomainUrl", { value: this.authDomain });
+        new cdk.CfnOutput(this, "UsersTableName", { value: this.usersTableName });
+        new cdk.CfnOutput(this, "UserAuthMethodsTableName", { value: this.userAuthMethodsTableName });
+        new cdk.CfnOutput(this, "AuthAuditLogTableName", { value: this.authAuditLogTableName });
         new cdk.CfnOutput(this, "Region", { value: cdk.Stack.of(this).region });
     }
 }

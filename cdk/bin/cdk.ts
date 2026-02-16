@@ -111,7 +111,10 @@ new AuthStack(app, "EmotixTestAuthStack", {
   authCertificateArn: globalCertArn,
 
   callbackUrls: ["https://" + DOMAINS.TEST + "/auth/callback"],
-  logoutUrls: ["https://" + DOMAINS.TEST + "/logout"],
+  logoutUrls: [
+    "https://" + DOMAINS.TEST + "/logout",
+    "https://" + DOMAINS.TEST + "/auth",
+  ],
 
   // SSM paths (you said they are already filled)
   googleClientIdParam: "/emotix/test/auth/google/client-id",
