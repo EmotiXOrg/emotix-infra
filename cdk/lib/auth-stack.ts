@@ -60,7 +60,7 @@ export class AuthStack extends cdk.Stack {
         const usersTable = new dynamodb.Table(this, "UsersTable", {
             partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
             billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-            pointInTimeRecovery: true,
+            pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
             removalPolicy: cdk.RemovalPolicy.DESTROY, // TEST-friendly; override in PROD later
         });
 
@@ -68,7 +68,7 @@ export class AuthStack extends cdk.Stack {
             partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
             sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
             billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-            pointInTimeRecovery: true,
+            pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
             removalPolicy: cdk.RemovalPolicy.DESTROY, // TEST-friendly; override in PROD later
         });
 
@@ -76,7 +76,7 @@ export class AuthStack extends cdk.Stack {
             partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
             sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
             billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-            pointInTimeRecovery: true,
+            pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
             removalPolicy: cdk.RemovalPolicy.DESTROY, // TEST-friendly; override in PROD later
         });
 
@@ -164,10 +164,9 @@ export class AuthStack extends cdk.Stack {
                     "cognito-idp:ListUsers",
                     "cognito-idp:AdminLinkProviderForUser",
                 ],
-                resources: [userPool.userPoolArn],
+                resources: ["*"],
             })
         );
-        preSignUpExternalProviderFn.addEnvironment("USER_POOL_ID", userPool.userPoolId);
 
         usersTable.grantWriteData(postConfirmationFn);
         userAuthMethodsTable.grantWriteData(postConfirmationFn);

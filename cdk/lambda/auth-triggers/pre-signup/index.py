@@ -9,7 +9,6 @@ logger = logging.getLogger()
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
 cognito = boto3.client("cognito-idp")
-USER_POOL_ID = os.environ["USER_POOL_ID"]
 
 
 def _normalize_email(email: str) -> str:
@@ -36,9 +35,9 @@ def _provider_subject(event: dict) -> str | None:
     return attrs.get("sub")
 
 
-def _get_destination_user_by_email(normalized_email: str) -> str | None:
+def _get_destination_user_by_email(user_pool_id: str, normalized_email: str) -> str | None:
     resp = cognito.list_users(
-        UserPoolId=USER_POOL_ID,
+        UserPoolId=user_pool_id,
         Filter=f'email = "{normalized_email}"',
         Limit=5,
     )
@@ -55,6 +54,10 @@ def _get_destination_user_by_email(normalized_email: str) -> str | None:
 def handler(event, _context):
     if event.get("triggerSource") != "PreSignUp_ExternalProvider":
         return event
+    user_pool_id = event.get("userPoolId")
+    if not user_pool_id:
+        logger.info("Skip linking: missing userPoolId in trigger event")
+        return event
 
     attrs = event.get("request", {}).get("userAttributes", {})
     email = attrs.get("email")
@@ -70,14 +73,14 @@ def handler(event, _context):
         return event
 
     normalized_email = _normalize_email(email)
-    destination_username = _get_destination_user_by_email(normalized_email)
+    destination_username = _get_destination_user_by_email(user_pool_id, normalized_email)
     if not destination_username:
         logger.info("No existing user for normalized email; no linking needed")
         return event
 
     try:
         cognito.admin_link_provider_for_user(
-            UserPoolId=USER_POOL_ID,
+            UserPoolId=user_pool_id,
             DestinationUser={
                 "ProviderName": "Cognito",
                 "ProviderAttributeValue": destination_username,
