@@ -49,18 +49,25 @@ def _provider_from_identities_attr(raw_identities: str | None) -> tuple[str | No
 
 
 def _put_method(account_id: str, provider: str, provider_sub: str, username: str, now: str) -> None:
-    dynamodb.put_item(
-        TableName=USER_AUTH_METHODS_TABLE_NAME,
-        Item={
-            "pk": {"S": f"USER#{account_id}"},
-            "sk": {"S": f"METHOD#{provider.upper()}"},
-            "provider": {"S": provider},
-            "provider_sub": {"S": provider_sub},
-            "linked_at": {"S": now},
-            "verified": {"BOOL": True},
-            "username": {"S": username},
-        },
-    )
+    try:
+        dynamodb.put_item(
+            TableName=USER_AUTH_METHODS_TABLE_NAME,
+            Item={
+                "pk": {"S": f"USER#{account_id}"},
+                "sk": {"S": f"METHOD#{provider.upper()}"},
+                "provider": {"S": provider},
+                "provider_sub": {"S": provider_sub},
+                "linked_at": {"S": now},
+                "verified": {"BOOL": True},
+                "username": {"S": username},
+            },
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+        )
+    except ClientError as err:
+        code = err.response.get("Error", {}).get("Code", "Unknown")
+        if code != "ConditionalCheckFailedException":
+            raise
+        logger.info("Auth method already attached account_id=%s provider=%s", account_id, provider)
 
 
 def _existing_account_id_by_email(normalized_email: str) -> str | None:

@@ -256,18 +256,24 @@ def handler(event, _context):
 
     canonical_account_id = _existing_account_id_by_email(normalized_email) or native_sub
     pk = f"USER#{canonical_account_id}"
-    dynamodb.put_item(
-        TableName=USER_AUTH_METHODS_TABLE_NAME,
-        Item={
-            "pk": {"S": pk},
-            "sk": {"S": "METHOD#COGNITO"},
-            "provider": {"S": "COGNITO"},
-            "provider_sub": {"S": canonical_account_id},
-            "linked_at": {"S": now},
-            "verified": {"BOOL": True},
-            "username": {"S": username},
-        },
-    )
+    try:
+        dynamodb.put_item(
+            TableName=USER_AUTH_METHODS_TABLE_NAME,
+            Item={
+                "pk": {"S": pk},
+                "sk": {"S": "METHOD#COGNITO"},
+                "provider": {"S": "COGNITO"},
+                "provider_sub": {"S": canonical_account_id},
+                "linked_at": {"S": now},
+                "verified": {"BOOL": True},
+                "username": {"S": username},
+            },
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+        )
+    except ClientError as err:
+        code = err.response.get("Error", {}).get("Code", "Unknown")
+        if code != "ConditionalCheckFailedException":
+            raise
     _put_audit(
         canonical_account_id,
         "SET_PASSWORD_PUBLIC_FLOW",

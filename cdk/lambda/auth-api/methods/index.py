@@ -33,38 +33,6 @@ def _provider_to_method(provider: str) -> str:
     return mapping.get(provider, provider.lower())
 
 
-def _infer_social_method_from_username(username: str) -> str | None:
-    if not username:
-        return None
-    if "_" not in username:
-        return None
-    prefix = username.split("_", 1)[0].lower()
-    if prefix in {"google", "facebook"}:
-        return prefix
-    return None
-
-
-def _methods_from_identities_claim(raw_identities) -> set[str]:
-    if not raw_identities:
-        return set()
-    try:
-        identities = json.loads(raw_identities) if isinstance(raw_identities, str) else raw_identities
-    except Exception:
-        return set()
-
-    methods: set[str] = set()
-    if not isinstance(identities, list):
-        return methods
-    for identity in identities:
-        if not isinstance(identity, dict):
-            continue
-        provider_name = str(identity.get("providerName", "")).strip()
-        if not provider_name:
-            continue
-        methods.add(_provider_to_method(provider_name))
-    return methods
-
-
 def _extract_attr(user: dict, attr_name: str) -> str | None:
     attrs = user.get("Attributes", [])
     hit = next((a for a in attrs if a.get("Name") == attr_name), None)
@@ -73,42 +41,6 @@ def _extract_attr(user: dict, attr_name: str) -> str | None:
 
 def _is_external_provider_user(user: dict) -> bool:
     return str(user.get("UserStatus", "")) == "EXTERNAL_PROVIDER"
-
-
-def _methods_from_cognito_user(user: dict) -> set[str]:
-    methods: set[str] = set()
-    identities_methods = _methods_from_identities_claim(_extract_attr(user, "identities"))
-    if identities_methods:
-        methods |= identities_methods
-        return methods
-
-    if _is_external_provider_user(user):
-        username = str(user.get("Username", ""))
-        inferred = _infer_social_method_from_username(username)
-        if inferred:
-            methods.add(inferred)
-    else:
-        methods.add("password")
-    return methods
-
-
-def _load_methods_from_cognito(sub: str) -> set[str]:
-    if not USER_POOL_ID or not sub:
-        return set()
-    try:
-        resp = cognito.list_users(
-            UserPoolId=USER_POOL_ID,
-            Filter=f'sub = "{sub}"',
-            Limit=5,
-        )
-    except Exception:
-        logger.exception("Failed to read users from Cognito for methods fallback")
-        return set()
-
-    methods: set[str] = set()
-    for user in resp.get("Users", []):
-        methods |= _methods_from_cognito_user(user)
-    return methods
 
 
 def _find_users_by_email(email: str) -> list[dict]:
@@ -196,38 +128,6 @@ def _resolve_canonical_sub(token_sub: str, email: str | None) -> str:
     return token_sub
 
 
-def _resolve_current_method(sub: str, claims: dict) -> str | None:
-    claim_username = str(claims.get("username") or claims.get("cognito:username") or "")
-    by_username = _infer_social_method_from_username(claim_username)
-    if by_username:
-        return by_username
-
-    claim_methods = _methods_from_identities_claim(claims.get("identities"))
-    social_claim_methods = [m for m in claim_methods if m in {"google", "facebook"}]
-    if len(social_claim_methods) == 1:
-        return social_claim_methods[0]
-
-    raw_amr = claims.get("amr")
-    amr_values: list[str] = []
-    if isinstance(raw_amr, list):
-        amr_values = [str(v).lower() for v in raw_amr]
-    elif isinstance(raw_amr, str):
-        amr_values = [raw_amr.lower()]
-    if any("google" in v for v in amr_values):
-        return "google"
-    if any("facebook" in v for v in amr_values):
-        return "facebook"
-
-    users = _find_users_by_sub(sub)
-    if users and _is_external_provider_user(users[0]):
-        external_methods = [m for m in _methods_from_cognito_user(users[0]) if m in {"google", "facebook"}]
-        if len(external_methods) == 1:
-            return external_methods[0]
-    # If provider cannot be proven from claims, leave current method unset.
-    # This avoids incorrectly marking password on linked social sessions.
-    return None
-
-
 def handler(event, _context):
     claims = (
         event.get("requestContext", {})
@@ -255,50 +155,14 @@ def handler(event, _context):
     for item in result.get("Items", []):
         provider = item.get("provider", {}).get("S", "")
         method = _provider_to_method(provider)
+        linked_at = item.get("linked_at", {}).get("S")
         methods_by_name[method] = {
             "method": method,
             "provider": provider,
-            "linkedAt": item.get("linked_at", {}).get("S"),
+            "linkedAt": linked_at,
             "verified": item.get("verified", {}).get("BOOL", False),
         }
 
-    inferred_methods = _methods_from_identities_claim(claims.get("identities"))
-    current_username = str(claims.get("username") or claims.get("cognito:username") or "")
-    current_method = _resolve_current_method(sub, claims)
-    # UX helper: mark the login method that produced the current session.
-    if current_method:
-        inferred_methods.add(current_method)
-    if not inferred_methods:
-        inferred_methods |= _load_methods_from_cognito(canonical_sub)
-    else:
-        # Merge token-derived methods with Cognito user-derived methods.
-        inferred_methods |= _load_methods_from_cognito(canonical_sub)
-    logger.info(
-        "Resolved auth methods token_sub=%s canonical_sub=%s: ddb=%s inferred=%s username=%s",
-        sub,
-        canonical_sub,
-        list(methods_by_name.keys()),
-        sorted(list(inferred_methods)),
-        current_username,
-    )
-
-    for method in inferred_methods:
-        if method in methods_by_name:
-            continue
-        provider = method.upper() if method == "password" else method.capitalize()
-        methods_by_name[method] = {
-            "method": method,
-            "provider": provider,
-            "linkedAt": None,
-            "verified": True,
-        }
-
     methods = list(methods_by_name.values())
-    if current_method:
-        for method in methods:
-            method["currentlyUsed"] = method.get("method") == current_method
-    else:
-        for method in methods:
-            method["currentlyUsed"] = False
 
     return _response(200, {"methods": methods})

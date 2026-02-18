@@ -98,18 +98,25 @@ def _existing_account_id_by_email(normalized_email: str | None) -> str | None:
 
 
 def _put_method(account_id: str, provider: str, provider_sub: str, username: str, now: str) -> None:
-    dynamodb.put_item(
-        TableName=USER_AUTH_METHODS_TABLE_NAME,
-        Item={
-            "pk": {"S": f"USER#{account_id}"},
-            "sk": {"S": f"METHOD#{provider.upper()}"},
-            "provider": {"S": provider},
-            "provider_sub": {"S": provider_sub},
-            "linked_at": {"S": now},
-            "verified": {"BOOL": True},
-            "username": {"S": username},
-        },
-    )
+    try:
+        dynamodb.put_item(
+            TableName=USER_AUTH_METHODS_TABLE_NAME,
+            Item={
+                "pk": {"S": f"USER#{account_id}"},
+                "sk": {"S": f"METHOD#{provider.upper()}"},
+                "provider": {"S": provider},
+                "provider_sub": {"S": provider_sub},
+                "linked_at": {"S": now},
+                "verified": {"BOOL": True},
+                "username": {"S": username},
+            },
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+        )
+    except ClientError as err:
+        code = err.response.get("Error", {}).get("Code", "Unknown")
+        if code != "ConditionalCheckFailedException":
+            raise
+        logger.info("Auth method already attached account_id=%s provider=%s", account_id, provider)
 
 
 def _put_audit(account_id: str, action: str, provider: str, details: str, now: str) -> None:
@@ -144,7 +151,7 @@ def handler(event, _context):
     if not account_id:
         return event
 
-    provider_name, provider_sub = _provider_from_identities_attr(identities_attr)
+    provider_name, provider_sub = None, None
     # Default to current sub, then switch to native sub for same email when available.
     # This ensures method metadata is stored under one account key.
     canonical_account_id = account_id
@@ -166,11 +173,13 @@ def handler(event, _context):
     current_users = _find_users_by_sub(user_pool_id, account_id)
     current_user = current_users[0] if current_users else None
     current_is_external = _is_external_provider_user(current_user) if current_user else False
-    if not (provider_name and provider_sub) and current_user:
-        persisted_identities = _extract_attr(current_user, "identities")
-        backfill_provider_name, backfill_provider_sub = _provider_from_identities_attr(persisted_identities)
-        provider_name = provider_name or backfill_provider_name
-        provider_sub = provider_sub or backfill_provider_sub
+    if current_is_external:
+        provider_name, provider_sub = _provider_from_identities_attr(identities_attr)
+        if not (provider_name and provider_sub) and current_user:
+            persisted_identities = _extract_attr(current_user, "identities")
+            backfill_provider_name, backfill_provider_sub = _provider_from_identities_attr(persisted_identities)
+            provider_name = provider_name or backfill_provider_name
+            provider_sub = provider_sub or backfill_provider_sub
 
     if current_is_external and not (provider_name and provider_sub):
         logger.error(
@@ -188,14 +197,10 @@ def handler(event, _context):
         )
         return event
 
-    # Only sync explicit social methods in post-auth.
-    # Never fallback to METHOD#COGNITO here to avoid false password links.
-    if provider_name and provider_sub:
+    if current_is_external and provider_name and provider_sub:
         _put_method(canonical_account_id, provider_name, provider_sub, username, now)
-    else:
-        logger.info("Post-auth: native session, no provider sync required")
 
-    if not (provider_name and provider_sub and normalized_email and native_user):
+    if not (current_is_external and provider_name and provider_sub and normalized_email and native_user):
         return event
 
     destination_username = native_user.get("Username")

@@ -90,18 +90,25 @@ def _account_id_from_users_row(users_row: dict | None) -> str | None:
 
 def _upsert_auth_method(account_id: str, provider_name: str, provider_subject: str, username: str) -> None:
     now = _now_iso()
-    dynamodb.put_item(
-        TableName=USER_AUTH_METHODS_TABLE_NAME,
-        Item={
-            "pk": {"S": f"USER#{account_id}"},
-            "sk": {"S": f"METHOD#{provider_name.upper()}"},
-            "provider": {"S": provider_name},
-            "provider_sub": {"S": provider_subject},
-            "linked_at": {"S": now},
-            "verified": {"BOOL": True},
-            "username": {"S": username},
-        },
-    )
+    try:
+        dynamodb.put_item(
+            TableName=USER_AUTH_METHODS_TABLE_NAME,
+            Item={
+                "pk": {"S": f"USER#{account_id}"},
+                "sk": {"S": f"METHOD#{provider_name.upper()}"},
+                "provider": {"S": provider_name},
+                "provider_sub": {"S": provider_subject},
+                "linked_at": {"S": now},
+                "verified": {"BOOL": True},
+                "username": {"S": username},
+            },
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+        )
+    except ClientError as err:
+        code = err.response.get("Error", {}).get("Code", "Unknown")
+        if code != "ConditionalCheckFailedException":
+            raise
+        logger.info("Auth method already attached account_id=%s provider=%s", account_id, provider_name)
 
 
 def _auto_heal_native_user(user_pool_id: str, normalized_email: str) -> str:
