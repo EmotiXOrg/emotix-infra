@@ -32,11 +32,11 @@ def _provider_to_method(provider: str) -> str:
     return mapping.get(provider, provider.lower())
 
 
-def _infer_method_from_username(username: str) -> str | None:
+def _infer_social_method_from_username(username: str) -> str | None:
     if not username:
         return None
     if "_" not in username:
-        return "password"
+        return None
     prefix = username.split("_", 1)[0].lower()
     if prefix in {"google", "facebook"}:
         return prefix
@@ -76,11 +76,14 @@ def _is_external_provider_user(user: dict) -> bool:
 
 def _methods_from_cognito_user(user: dict) -> set[str]:
     methods: set[str] = set()
-    username = str(user.get("Username", ""))
-    inferred = _infer_method_from_username(username)
-    if inferred:
-        methods.add(inferred)
-    methods |= _methods_from_identities_claim(_extract_attr(user, "identities"))
+    if _is_external_provider_user(user):
+        username = str(user.get("Username", ""))
+        inferred = _infer_social_method_from_username(username)
+        if inferred:
+            methods.add(inferred)
+        methods |= _methods_from_identities_claim(_extract_attr(user, "identities"))
+    else:
+        methods.add("password")
     return methods
 
 
@@ -160,6 +163,30 @@ def _resolve_canonical_sub(token_sub: str, email: str | None) -> str:
     return token_sub
 
 
+def _resolve_current_method(sub: str, claims: dict) -> str | None:
+    claim_username = str(claims.get("username") or claims.get("cognito:username") or "")
+    by_username = _infer_social_method_from_username(claim_username)
+    if by_username:
+        return by_username
+
+    claim_methods = _methods_from_identities_claim(claims.get("identities"))
+    social_claim_methods = [m for m in claim_methods if m in {"google", "facebook"}]
+    if len(social_claim_methods) == 1:
+        return social_claim_methods[0]
+
+    # Final fallback: inspect the token owner user row in Cognito by sub.
+    users = _find_users_by_sub(sub)
+    if not users:
+        return None
+    user = users[0]
+    if not _is_external_provider_user(user):
+        return "password"
+    social_user_methods = [m for m in _methods_from_cognito_user(user) if m in {"google", "facebook"}]
+    if len(social_user_methods) == 1:
+        return social_user_methods[0]
+    return None
+
+
 def handler(event, _context):
     claims = (
         event.get("requestContext", {})
@@ -196,7 +223,7 @@ def handler(event, _context):
 
     inferred_methods = _methods_from_identities_claim(claims.get("identities"))
     current_username = str(claims.get("username") or claims.get("cognito:username") or "")
-    current_method = _infer_method_from_username(current_username)
+    current_method = _resolve_current_method(sub, claims)
     # UX helper: mark the login method that produced the current session.
     if current_method:
         inferred_methods.add(current_method)
