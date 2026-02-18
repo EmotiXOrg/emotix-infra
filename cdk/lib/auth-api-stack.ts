@@ -40,7 +40,6 @@ export class AuthApiStack extends cdk.Stack {
             props.userPoolClientId
         );
 
-        const usersTable = dynamodb.Table.fromTableName(this, "AuthApiUsersTable", props.usersTableName);
         const userAuthMethodsTable = dynamodb.Table.fromTableName(
             this,
             "AuthApiUserAuthMethodsTable",
@@ -88,6 +87,32 @@ export class AuthApiStack extends cdk.Stack {
             },
         });
 
+        const passwordSetupStartFn = new lambda.Function(this, "PasswordSetupStartFn", {
+            runtime: lambda.Runtime.PYTHON_3_12,
+            handler: "index.handler",
+            code: lambda.Code.fromAsset(path.join(__dirname, "..", "lambda", "auth-api", "password-setup-start")),
+            timeout: cdk.Duration.seconds(10),
+            environment: {
+                USER_POOL_ID: props.userPoolId,
+                USER_POOL_CLIENT_ID: props.userPoolClientId,
+                LOG_LEVEL: "INFO",
+            },
+        });
+
+        const passwordSetupCompleteFn = new lambda.Function(this, "PasswordSetupCompleteFn", {
+            runtime: lambda.Runtime.PYTHON_3_12,
+            handler: "index.handler",
+            code: lambda.Code.fromAsset(path.join(__dirname, "..", "lambda", "auth-api", "password-setup-complete")),
+            timeout: cdk.Duration.seconds(10),
+            environment: {
+                USER_POOL_ID: props.userPoolId,
+                USER_POOL_CLIENT_ID: props.userPoolClientId,
+                USER_AUTH_METHODS_TABLE_NAME: props.userAuthMethodsTableName,
+                AUTH_AUDIT_LOG_TABLE_NAME: props.authAuditLogTableName,
+                LOG_LEVEL: "INFO",
+            },
+        });
+
         discoverFn.addToRolePolicy(
             new iam.PolicyStatement({
                 sid: "DiscoverReadCognitoUsers",
@@ -108,6 +133,28 @@ export class AuthApiStack extends cdk.Stack {
         authAuditLogTable.grantWriteData(setPasswordFn);
 
         userAuthMethodsTable.grantReadData(methodsFn);
+
+        passwordSetupStartFn.addToRolePolicy(
+            new iam.PolicyStatement({
+                sid: "PasswordSetupStartCognitoAccess",
+                actions: ["cognito-idp:SignUp", "cognito-idp:ResendConfirmationCode"],
+                resources: ["*"],
+            })
+        );
+
+        passwordSetupCompleteFn.addToRolePolicy(
+            new iam.PolicyStatement({
+                sid: "PasswordSetupCompleteCognitoAccess",
+                actions: [
+                    "cognito-idp:ConfirmSignUp",
+                    "cognito-idp:AdminSetUserPassword",
+                    "cognito-idp:ListUsers",
+                ],
+                resources: ["*"],
+            })
+        );
+        userAuthMethodsTable.grantWriteData(passwordSetupCompleteFn);
+        authAuditLogTable.grantWriteData(passwordSetupCompleteFn);
 
         const userPoolAuthorizer = new authorizers.HttpUserPoolAuthorizer("UserPoolAuthorizer", userPool, {
             userPoolClients: [userPoolClient],
@@ -144,6 +191,18 @@ export class AuthApiStack extends cdk.Stack {
             methods: [apigwv2.HttpMethod.GET],
             integration: new integrations.HttpLambdaIntegration("GetMethodsAuthIntegration", methodsFn),
             authorizer: userPoolAuthorizer,
+        });
+
+        httpApi.addRoutes({
+            path: "/auth/password-setup/start",
+            methods: [apigwv2.HttpMethod.POST],
+            integration: new integrations.HttpLambdaIntegration("PasswordSetupStartIntegration", passwordSetupStartFn),
+        });
+
+        httpApi.addRoutes({
+            path: "/auth/password-setup/complete",
+            methods: [apigwv2.HttpMethod.POST],
+            integration: new integrations.HttpLambdaIntegration("PasswordSetupCompleteIntegration", passwordSetupCompleteFn),
         });
 
         const cert = acm.Certificate.fromCertificateArn(this, "AuthApiRegionalCert", props.regionalCertificateArn);
@@ -215,6 +274,22 @@ export class AuthApiStack extends cdk.Stack {
             treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
             alarmDescription: "Get-methods Lambda errors.",
         });
+        const passwordSetupStartErrorsAlarm = new cloudwatch.Alarm(this, "PasswordSetupStartFnErrorsAlarm", {
+            metric: passwordSetupStartFn.metricErrors({ period: cdk.Duration.minutes(5), statistic: "sum" }),
+            threshold: 1,
+            evaluationPeriods: 1,
+            datapointsToAlarm: 1,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarmDescription: "Password setup start Lambda errors.",
+        });
+        const passwordSetupCompleteErrorsAlarm = new cloudwatch.Alarm(this, "PasswordSetupCompleteFnErrorsAlarm", {
+            metric: passwordSetupCompleteFn.metricErrors({ period: cdk.Duration.minutes(5), statistic: "sum" }),
+            threshold: 1,
+            evaluationPeriods: 1,
+            datapointsToAlarm: 1,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarmDescription: "Password setup complete Lambda errors.",
+        });
         const api5xxAlarm = new cloudwatch.Alarm(this, "AuthApi5xxAlarm", {
             metric: httpApi.metricServerError({ period: cdk.Duration.minutes(5), statistic: "sum" }),
             threshold: 5,
@@ -231,6 +306,8 @@ export class AuthApiStack extends cdk.Stack {
         new cdk.CfnOutput(this, "DiscoverAuthFnErrorsAlarmName", { value: discoverErrorsAlarm.alarmName });
         new cdk.CfnOutput(this, "SetPasswordAuthFnErrorsAlarmName", { value: setPasswordErrorsAlarm.alarmName });
         new cdk.CfnOutput(this, "GetMethodsAuthFnErrorsAlarmName", { value: methodsErrorsAlarm.alarmName });
+        new cdk.CfnOutput(this, "PasswordSetupStartFnErrorsAlarmName", { value: passwordSetupStartErrorsAlarm.alarmName });
+        new cdk.CfnOutput(this, "PasswordSetupCompleteFnErrorsAlarmName", { value: passwordSetupCompleteErrorsAlarm.alarmName });
         new cdk.CfnOutput(this, "AuthApi5xxAlarmName", { value: api5xxAlarm.alarmName });
     }
 }

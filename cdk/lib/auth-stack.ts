@@ -64,6 +64,11 @@ export class AuthStack extends cdk.Stack {
             pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
             removalPolicy: cdk.RemovalPolicy.DESTROY, // TEST-friendly; override in PROD later
         });
+        usersTable.addGlobalSecondaryIndex({
+            indexName: "normalized_email-index",
+            partitionKey: { name: "normalized_email", type: dynamodb.AttributeType.STRING },
+            projectionType: dynamodb.ProjectionType.ALL,
+        });
 
         const userAuthMethodsTable = new dynamodb.Table(this, "UserAuthMethodsTable", {
             partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
@@ -87,6 +92,7 @@ export class AuthStack extends cdk.Stack {
             code: lambda.Code.fromAsset(path.join(__dirname, "..", "lambda", "auth-triggers", "pre-signup")),
             timeout: cdk.Duration.seconds(10),
             environment: {
+                USERS_TABLE_NAME: usersTable.tableName,
                 LOG_LEVEL: "INFO",
             },
         });
@@ -164,10 +170,12 @@ export class AuthStack extends cdk.Stack {
                 actions: [
                     "cognito-idp:ListUsers",
                     "cognito-idp:AdminLinkProviderForUser",
+                    "cognito-idp:AdminCreateUser",
                 ],
                 resources: ["*"],
             })
         );
+        usersTable.grantReadData(preSignUpExternalProviderFn);
 
         usersTable.grantWriteData(postConfirmationFn);
         userAuthMethodsTable.grantWriteData(postConfirmationFn);

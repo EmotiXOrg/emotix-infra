@@ -1,6 +1,7 @@
-import json
 import logging
 import os
+import secrets
+import string
 
 import boto3
 from botocore.exceptions import ClientError
@@ -9,6 +10,8 @@ logger = logging.getLogger()
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
 cognito = boto3.client("cognito-idp")
+dynamodb = boto3.client("dynamodb")
+USERS_TABLE_NAME = os.environ["USERS_TABLE_NAME"]
 
 
 def _normalize_email(email: str) -> str:
@@ -35,6 +38,12 @@ def _provider_subject(event: dict) -> str | None:
     return attrs.get("sub")
 
 
+def _random_temporary_password() -> str:
+    alphabet = string.ascii_letters + string.digits
+    core = "".join(secrets.choice(alphabet) for _ in range(20))
+    return f"Aa{core}9"
+
+
 def _get_destination_user_by_email(user_pool_id: str, normalized_email: str) -> str | None:
     resp = cognito.list_users(
         UserPoolId=user_pool_id,
@@ -45,37 +54,72 @@ def _get_destination_user_by_email(user_pool_id: str, normalized_email: str) -> 
     if not users:
         return None
 
-    # Prefer native Cognito user if present; else the first match.
     native = next((u for u in users if "_" not in (u.get("Username") or "")), None)
     chosen = native or users[0]
     return chosen.get("Username")
 
 
+def _exists_in_users_table(normalized_email: str) -> bool:
+    resp = dynamodb.query(
+        TableName=USERS_TABLE_NAME,
+        IndexName="normalized_email-index",
+        KeyConditionExpression="normalized_email = :email",
+        ExpressionAttributeValues={":email": {"S": normalized_email}},
+        Limit=1,
+    )
+    return len(resp.get("Items", [])) > 0
+
+
+def _auto_heal_native_user(user_pool_id: str, normalized_email: str) -> str:
+    username = normalized_email
+    try:
+        cognito.admin_create_user(
+            UserPoolId=user_pool_id,
+            Username=username,
+            UserAttributes=[
+                {"Name": "email", "Value": normalized_email},
+                {"Name": "email_verified", "Value": "true"},
+            ],
+            TemporaryPassword=_random_temporary_password(),
+            MessageAction="SUPPRESS",
+        )
+        logger.info("Auto-healed missing Cognito native user from Dynamo metadata")
+        return username
+    except ClientError as err:
+        code = err.response.get("Error", {}).get("Code", "Unknown")
+        if code == "UsernameExistsException":
+            return username
+        raise
+
+
 def handler(event, _context):
     if event.get("triggerSource") != "PreSignUp_ExternalProvider":
         return event
+
     user_pool_id = event.get("userPoolId")
     if not user_pool_id:
-        logger.info("Skip linking: missing userPoolId in trigger event")
-        return event
+        raise Exception("Missing userPoolId in authentication flow.")
 
     attrs = event.get("request", {}).get("userAttributes", {})
     email = attrs.get("email")
-    email_verified = str(attrs.get("email_verified", "")).lower() == "true"
     provider_name = _provider_name_from_username(event.get("userName") or "")
     provider_subject = _provider_subject(event)
 
-    if not email or not email_verified:
-        logger.info("Skip linking: missing or unverified email")
-        return event
+    if not email:
+        raise Exception(
+            f"We were not able to get your email from {provider_name or 'social provider'}, please try again or use another login option."
+        )
     if not provider_name or not provider_subject:
-        logger.info("Skip linking: could not resolve provider name/subject")
-        return event
+        raise Exception("Unable to resolve social provider identity, please try again.")
 
     normalized_email = _normalize_email(email)
     destination_username = _get_destination_user_by_email(user_pool_id, normalized_email)
+
+    if not destination_username and _exists_in_users_table(normalized_email):
+        destination_username = _auto_heal_native_user(user_pool_id, normalized_email)
+
     if not destination_username:
-        logger.info("No existing user for normalized email; no linking needed")
+        logger.info("No existing account found, external provider user will be created by Cognito")
         return event
 
     try:
@@ -91,29 +135,15 @@ def handler(event, _context):
                 "ProviderAttributeValue": provider_subject,
             },
         )
-        logger.info(
-            "Linked provider to existing user",
-            extra={
-                "destination": destination_username,
-                "provider_name": provider_name,
-                "normalized_email": normalized_email,
-            },
-        )
     except ClientError as err:
         code = err.response.get("Error", {}).get("Code", "Unknown")
-        message = err.response.get("Error", {}).get("Message", "")
-        # Idempotent behavior: linking may already exist.
-        if code in {"AliasExistsException", "InvalidParameterException", "ResourceConflictException"}:
-            logger.info(
-                "Linking already established or in conflicting state, continuing",
-                extra={"code": code, "message": message},
+        if code in {"AliasExistsException", "ResourceConflictException"}:
+            raise Exception(
+                "This email is already linked to another account. Use your original sign-in method or contact support."
             )
+        if code == "InvalidParameterException":
+            # Already linked to the same destination in repeat flows; continue.
             return event
-
-        logger.error(
-            "Failed linking external provider",
-            extra={"code": code, "message": message, "event": json.dumps(event)},
-        )
         raise
 
     return event
