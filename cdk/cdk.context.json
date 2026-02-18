@@ -1,6 +1,7 @@
 {
   "acknowledged-issue-numbers": [
-    34892
+    34892,
+    37013
   ],
   "hosted-zone:account=170145218709:domainName=emotix.net:region=eu-central-1": {
     "Id": "/hostedzone/Z09296673HA5VRUS047E9",
