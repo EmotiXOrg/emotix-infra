@@ -12,3 +12,11 @@ export const DOMAINS = {
     STAGE: "stage." + MAIN_DOMAIN,
     PROD: MAIN_DOMAIN
 };
+
+export const EMAIL_LOCAL_PARTS = {
+    NO_REPLY: "no-reply",
+    SUPPORT: "support",
+} as const;
+
+export const MAIL_FROM_SUBDOMAIN = "mail";
+export const PRODUCT_FROM_NAME = "EmotiX";

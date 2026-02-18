@@ -8,6 +8,7 @@ import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as route53 from "aws-cdk-lib/aws-route53";
 import * as targets from "aws-cdk-lib/aws-route53-targets";
 import * as ssm from "aws-cdk-lib/aws-ssm";
@@ -34,6 +35,10 @@ export interface AuthStackProps extends cdk.StackProps {
     facebookAppSecretParam: string;
     googleClientSecretVersion?: number;
     facebookAppSecretVersion?: number;
+    sesFromEmailAddress: string;
+    sesFromName?: string;
+    sesReplyToAddress?: string;
+    sesSourceArn: string;
 }
 
 export class AuthStack extends cdk.Stack {
@@ -93,6 +98,7 @@ export class AuthStack extends cdk.Stack {
             timeout: cdk.Duration.seconds(10),
             environment: {
                 USERS_TABLE_NAME: usersTable.tableName,
+                USER_AUTH_METHODS_TABLE_NAME: userAuthMethodsTable.tableName,
                 LOG_LEVEL: "INFO",
             },
         });
@@ -115,6 +121,7 @@ export class AuthStack extends cdk.Stack {
             code: lambda.Code.fromAsset(path.join(__dirname, "..", "lambda", "auth-triggers", "post-authentication")),
             timeout: cdk.Duration.seconds(10),
             environment: {
+                USERS_TABLE_NAME: usersTable.tableName,
                 USER_AUTH_METHODS_TABLE_NAME: userAuthMethodsTable.tableName,
                 AUTH_AUDIT_LOG_TABLE_NAME: authAuditLogTable.tableName,
                 LOG_LEVEL: "INFO",
@@ -152,6 +159,7 @@ export class AuthStack extends cdk.Stack {
                 emailBody:
                     "Your EmotiX verification code is {####}. If you didn’t request this, ignore this email.",
             },
+            email: cognito.UserPoolEmail.withCognito(props.sesReplyToAddress),
 
             // Optional: keep MFA off for MVP
             mfa: cognito.Mfa.OFF,
@@ -175,6 +183,15 @@ export class AuthStack extends cdk.Stack {
                 postAuthentication: postAuthenticationFn,
             },
         });
+        const cfnUserPool = userPool.node.defaultChild as cognito.CfnUserPool;
+        cfnUserPool.emailConfiguration = {
+            emailSendingAccount: "DEVELOPER",
+            from: props.sesFromName
+                ? `${props.sesFromName} <${props.sesFromEmailAddress}>`
+                : props.sesFromEmailAddress,
+            replyToEmailAddress: props.sesReplyToAddress,
+            sourceArn: props.sesSourceArn,
+        };
 
         preSignUpExternalProviderFn.addToRolePolicy(
             new iam.PolicyStatement({
@@ -188,10 +205,12 @@ export class AuthStack extends cdk.Stack {
             })
         );
         usersTable.grantReadData(preSignUpExternalProviderFn);
+        userAuthMethodsTable.grantWriteData(preSignUpExternalProviderFn);
 
-        usersTable.grantWriteData(postConfirmationFn);
+        usersTable.grantReadWriteData(postConfirmationFn);
         userAuthMethodsTable.grantWriteData(postConfirmationFn);
         authAuditLogTable.grantWriteData(postConfirmationFn);
+        usersTable.grantReadData(postAuthenticationFn);
         userAuthMethodsTable.grantWriteData(postAuthenticationFn);
         authAuditLogTable.grantWriteData(postAuthenticationFn);
         postAuthenticationFn.addToRolePolicy(
@@ -228,6 +247,24 @@ export class AuthStack extends cdk.Stack {
             treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
             alarmDescription: "Post-confirmation trigger returned errors.",
         });
+        const postConfirmationProviderContextMissingMetric = new logs.MetricFilter(this, "PostConfirmationProviderContextMissingMetric", {
+            logGroup: postConfirmationFn.logGroup,
+            filterPattern: logs.FilterPattern.literal("POST_CONFIRMATION_PROVIDER_CONTEXT_MISSING"),
+            metricNamespace: "Emotix/Auth",
+            metricName: "PostConfirmationProviderContextMissing",
+            metricValue: "1",
+        });
+        const postConfirmationProviderContextMissingAlarm = new cloudwatch.Alarm(this, "PostConfirmationProviderContextMissingAlarm", {
+            metric: postConfirmationProviderContextMissingMetric.metric({
+                period: cdk.Duration.minutes(5),
+                statistic: "sum",
+            }),
+            threshold: 1,
+            evaluationPeriods: 1,
+            datapointsToAlarm: 1,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarmDescription: "Post-confirmation trigger could not resolve provider context for first signup confirmation.",
+        });
         const postAuthenticationErrorsAlarm = new cloudwatch.Alarm(this, "PostAuthenticationTriggerErrorsAlarm", {
             metric: postAuthenticationFn.metricErrors({
                 period: cdk.Duration.minutes(5),
@@ -238,6 +275,24 @@ export class AuthStack extends cdk.Stack {
             datapointsToAlarm: 1,
             treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
             alarmDescription: "Post-authentication trigger returned errors.",
+        });
+        const postAuthProviderContextMissingMetric = new logs.MetricFilter(this, "PostAuthProviderContextMissingMetric", {
+            logGroup: postAuthenticationFn.logGroup,
+            filterPattern: logs.FilterPattern.literal("POST_AUTH_PROVIDER_CONTEXT_MISSING"),
+            metricNamespace: "Emotix/Auth",
+            metricName: "PostAuthProviderContextMissing",
+            metricValue: "1",
+        });
+        const postAuthProviderContextMissingAlarm = new cloudwatch.Alarm(this, "PostAuthProviderContextMissingAlarm", {
+            metric: postAuthProviderContextMissingMetric.metric({
+                period: cdk.Duration.minutes(5),
+                statistic: "sum",
+            }),
+            threshold: 1,
+            evaluationPeriods: 1,
+            datapointsToAlarm: 1,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarmDescription: "Post-auth trigger could not resolve provider context for external login.",
         });
 
         /**
@@ -383,7 +438,11 @@ export class AuthStack extends cdk.Stack {
         new cdk.CfnOutput(this, "AuthAuditLogTableName", { value: this.authAuditLogTableName });
         new cdk.CfnOutput(this, "PreSignUpTriggerErrorsAlarmName", { value: preSignUpErrorsAlarm.alarmName });
         new cdk.CfnOutput(this, "PostConfirmationTriggerErrorsAlarmName", { value: postConfirmationErrorsAlarm.alarmName });
+        new cdk.CfnOutput(this, "PostConfirmationProviderContextMissingAlarmName", {
+            value: postConfirmationProviderContextMissingAlarm.alarmName,
+        });
         new cdk.CfnOutput(this, "PostAuthenticationTriggerErrorsAlarmName", { value: postAuthenticationErrorsAlarm.alarmName });
+        new cdk.CfnOutput(this, "PostAuthProviderContextMissingAlarmName", { value: postAuthProviderContextMissingAlarm.alarmName });
         new cdk.CfnOutput(this, "Region", { value: cdk.Stack.of(this).region });
     }
 }

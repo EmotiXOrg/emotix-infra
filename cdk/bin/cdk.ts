@@ -4,10 +4,23 @@ import { ManagementDnsStack } from "../lib/management-dns-stack";
 import { TlsCertStack } from "../lib/global/tls-cert-stack";
 import { WebStack } from "../lib/web-stack";
 import { BillingGuardrailsStack } from "../lib/global/billing-guardrails-stack";
-import { AWS_MGMT_EMAIL, DOMAINS, EU_CENTRAL_1_REGION, MAIN_DOMAIN, MGMT_ACCOUNT_ID, PROD_ACCOUNT_ID, TEST_ACCOUNT_ID, US_EAST_1_REGION } from "../constants";
+import {
+  AWS_MGMT_EMAIL,
+  DOMAINS,
+  EMAIL_LOCAL_PARTS,
+  EU_CENTRAL_1_REGION,
+  MAIL_FROM_SUBDOMAIN,
+  MAIN_DOMAIN,
+  MGMT_ACCOUNT_ID,
+  PROD_ACCOUNT_ID,
+  PRODUCT_FROM_NAME,
+  TEST_ACCOUNT_ID,
+  US_EAST_1_REGION,
+} from "../constants";
 import { AuthStack } from "../lib/auth-stack";
 import { AuthApiStack } from "../lib/auth-api-stack";
 import { StaticAssetsStack } from "../lib/static-assets-stack";
+import { SesStack } from "../lib/ses-stack";
 
 const app = new cdk.App();
 
@@ -74,7 +87,6 @@ const regionalCertArn = app.node.tryGetContext("regionalTestTlsCertArn") as stri
 if (!regionalCertArn) {
   throw new Error("Missing context.regionalTestTlsCertArn in cdk.json");
 }
-
 new WebStack(app, "EmotixTestWebStack", {
   env: { account: TEST_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
   domainName: DOMAINS.TEST,
@@ -108,6 +120,16 @@ new BillingGuardrailsStack(app, "BillingGuardrailsStack", {
   defaultAnomalyMonitorArn: "arn:aws:ce::170145218709:anomalymonitor/dda76256-5e70-499e-bba1-ce1b01af265c",
 });
 
+const testSesStack = new SesStack(app, "EmotixTestSesStack", {
+  env: { account: TEST_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
+  zoneName: DOMAINS.TEST,
+  domainName: DOMAINS.TEST,
+  fromEmailAddress: `${EMAIL_LOCAL_PARTS.NO_REPLY}@${DOMAINS.TEST}`,
+  replyToEmailAddress: `${EMAIL_LOCAL_PARTS.SUPPORT}@${DOMAINS.TEST}`,
+  fromName: PRODUCT_FROM_NAME,
+  mailFromDomain: `${MAIL_FROM_SUBDOMAIN}.${DOMAINS.TEST}`,
+});
+
 const authStack = new AuthStack(app, "EmotixTestAuthStack", {
   env: { account: TEST_ACCOUNT_ID, region: EU_CENTRAL_1_REGION },
 
@@ -126,6 +148,10 @@ const authStack = new AuthStack(app, "EmotixTestAuthStack", {
   googleClientSecretParam: "/emotix/test/auth/google/client-secret",
   facebookAppIdParam: "/emotix/test/auth/facebook/app-id",
   facebookAppSecretParam: "/emotix/test/auth/facebook/app-secret",
+  sesFromEmailAddress: testSesStack.fromEmailAddress,
+  sesFromName: testSesStack.fromName,
+  sesReplyToAddress: testSesStack.replyToEmailAddress,
+  sesSourceArn: testSesStack.identityArn,
 });
 
 new AuthApiStack(app, "EmotixTestAuthApiStack", {
