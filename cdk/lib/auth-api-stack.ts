@@ -45,11 +45,18 @@ export class AuthApiStack extends cdk.Stack {
             "AuthApiUserAuthMethodsTable",
             props.userAuthMethodsTableName
         );
+        const usersTable = dynamodb.Table.fromTableName(this, "AuthApiUsersTable", props.usersTableName);
         const authAuditLogTable = dynamodb.Table.fromTableName(
             this,
             "AuthApiAuthAuditLogTable",
             props.authAuditLogTableName
         );
+        const usersTableArn = cdk.Stack.of(this).formatArn({
+            service: "dynamodb",
+            resource: "table",
+            resourceName: props.usersTableName,
+        });
+        const usersTableNormalizedEmailIndexArn = `${usersTableArn}/index/normalized_email-index`;
 
         const discoverFn = new lambda.Function(this, "DiscoverAuthFn", {
             runtime: lambda.Runtime.PYTHON_3_12,
@@ -83,6 +90,7 @@ export class AuthApiStack extends cdk.Stack {
             timeout: cdk.Duration.seconds(10),
             environment: {
                 USER_AUTH_METHODS_TABLE_NAME: props.userAuthMethodsTableName,
+                USERS_TABLE_NAME: props.usersTableName,
                 USER_POOL_ID: props.userPoolId,
                 LOG_LEVEL: "INFO",
             },
@@ -108,6 +116,7 @@ export class AuthApiStack extends cdk.Stack {
             environment: {
                 USER_POOL_ID: props.userPoolId,
                 USER_POOL_CLIENT_ID: props.userPoolClientId,
+                USERS_TABLE_NAME: props.usersTableName,
                 USER_AUTH_METHODS_TABLE_NAME: props.userAuthMethodsTableName,
                 AUTH_AUDIT_LOG_TABLE_NAME: props.authAuditLogTableName,
                 LOG_LEVEL: "INFO",
@@ -134,6 +143,14 @@ export class AuthApiStack extends cdk.Stack {
         authAuditLogTable.grantWriteData(setPasswordFn);
 
         userAuthMethodsTable.grantReadData(methodsFn);
+        usersTable.grantReadData(methodsFn);
+        methodsFn.addToRolePolicy(
+            new iam.PolicyStatement({
+                sid: "MethodsQueryUsersByNormalizedEmailIndex",
+                actions: ["dynamodb:Query"],
+                resources: [usersTableArn, usersTableNormalizedEmailIndexArn],
+            })
+        );
         methodsFn.addToRolePolicy(
             new iam.PolicyStatement({
                 sid: "MethodsReadCognitoUsers",
@@ -157,8 +174,17 @@ export class AuthApiStack extends cdk.Stack {
                     "cognito-idp:ConfirmSignUp",
                     "cognito-idp:AdminSetUserPassword",
                     "cognito-idp:ListUsers",
+                    "cognito-idp:AdminLinkProviderForUser",
                 ],
                 resources: ["*"],
+            })
+        );
+        usersTable.grantReadData(passwordSetupCompleteFn);
+        passwordSetupCompleteFn.addToRolePolicy(
+            new iam.PolicyStatement({
+                sid: "PasswordSetupCompleteQueryUsersByNormalizedEmailIndex",
+                actions: ["dynamodb:Query"],
+                resources: [usersTableArn, usersTableNormalizedEmailIndexArn],
             })
         );
         userAuthMethodsTable.grantWriteData(passwordSetupCompleteFn);

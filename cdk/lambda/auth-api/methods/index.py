@@ -9,6 +9,7 @@ logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
 dynamodb = boto3.client("dynamodb")
 cognito = boto3.client("cognito-idp")
+USERS_TABLE_NAME = os.environ["USERS_TABLE_NAME"]
 USER_AUTH_METHODS_TABLE_NAME = os.environ["USER_AUTH_METHODS_TABLE_NAME"]
 USER_POOL_ID = os.getenv("USER_POOL_ID")
 
@@ -76,12 +77,16 @@ def _is_external_provider_user(user: dict) -> bool:
 
 def _methods_from_cognito_user(user: dict) -> set[str]:
     methods: set[str] = set()
+    identities_methods = _methods_from_identities_claim(_extract_attr(user, "identities"))
+    if identities_methods:
+        methods |= identities_methods
+        return methods
+
     if _is_external_provider_user(user):
         username = str(user.get("Username", ""))
         inferred = _infer_social_method_from_username(username)
         if inferred:
             methods.add(inferred)
-        methods |= _methods_from_identities_claim(_extract_attr(user, "identities"))
     else:
         methods.add("password")
     return methods
@@ -136,6 +141,30 @@ def _find_users_by_sub(sub: str) -> list[dict]:
         return []
 
 
+def _existing_account_id_by_email(normalized_email: str | None) -> str | None:
+    if not normalized_email:
+        return None
+    try:
+        response = dynamodb.query(
+            TableName=USERS_TABLE_NAME,
+            IndexName="normalized_email-index",
+            KeyConditionExpression="normalized_email = :email",
+            ExpressionAttributeValues={":email": {"S": normalized_email}},
+            Limit=1,
+        )
+    except Exception:
+        logger.exception("Failed to resolve account id by normalized email")
+        return None
+
+    items = response.get("Items", [])
+    if not items:
+        return None
+    pk = items[0].get("pk", {}).get("S", "")
+    if isinstance(pk, str) and pk.startswith("USER#"):
+        return pk.replace("USER#", "", 1)
+    return None
+
+
 def _resolve_canonical_sub(token_sub: str, email: str | None) -> str:
     # Access tokens from social flows may omit email. In that case, resolve email from
     # the Cognito user row for this token sub, then pick native account sub by email.
@@ -150,6 +179,10 @@ def _resolve_canonical_sub(token_sub: str, email: str | None) -> str:
 
     if not resolved_email:
         return token_sub
+
+    existing_account_id = _existing_account_id_by_email(resolved_email)
+    if existing_account_id:
+        return existing_account_id
 
     users = _find_users_by_email(resolved_email)
     if not users:
@@ -174,16 +207,24 @@ def _resolve_current_method(sub: str, claims: dict) -> str | None:
     if len(social_claim_methods) == 1:
         return social_claim_methods[0]
 
-    # Final fallback: inspect the token owner user row in Cognito by sub.
+    raw_amr = claims.get("amr")
+    amr_values: list[str] = []
+    if isinstance(raw_amr, list):
+        amr_values = [str(v).lower() for v in raw_amr]
+    elif isinstance(raw_amr, str):
+        amr_values = [raw_amr.lower()]
+    if any("google" in v for v in amr_values):
+        return "google"
+    if any("facebook" in v for v in amr_values):
+        return "facebook"
+
     users = _find_users_by_sub(sub)
-    if not users:
-        return None
-    user = users[0]
-    if not _is_external_provider_user(user):
-        return "password"
-    social_user_methods = [m for m in _methods_from_cognito_user(user) if m in {"google", "facebook"}]
-    if len(social_user_methods) == 1:
-        return social_user_methods[0]
+    if users and _is_external_provider_user(users[0]):
+        external_methods = [m for m in _methods_from_cognito_user(users[0]) if m in {"google", "facebook"}]
+        if len(external_methods) == 1:
+            return external_methods[0]
+    # If provider cannot be proven from claims, leave current method unset.
+    # This avoids incorrectly marking password on linked social sessions.
     return None
 
 

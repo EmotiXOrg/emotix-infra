@@ -46,7 +46,10 @@ def _infer_provider_from_username(username: str) -> str:
         return "google"
     if prefix == "facebook":
         return "facebook"
-    return prefix
+    if prefix == "signinwithapple":
+        return "apple"
+    # Username may contain "_" for native users (for example, email local-part).
+    return "password"
 
 
 def _extract_providers_from_identities(raw_identities) -> set[str]:
@@ -85,6 +88,10 @@ def _extract_attr(user: dict, attr_name: str) -> str | None:
     return hit.get("Value") if hit else None
 
 
+def _is_external_provider_user(user: dict) -> bool:
+    return str(user.get("UserStatus", "")) == "EXTERNAL_PROVIDER"
+
+
 def handler(event, _context):
     try:
         body = json.loads(event.get("body") or "{}")
@@ -114,11 +121,16 @@ def handler(event, _context):
             },
         )
 
-    native_user = next((u for u in users if "_" not in (u.get("Username") or "")), None)
+    native_user = next((u for u in users if not _is_external_provider_user(u)), None)
     chosen_user = native_user or users[0]
     username = chosen_user.get("Username", "")
     account_id = _extract_attr(chosen_user, "sub")
-    email_verified = str(_extract_attr(chosen_user, "email_verified") or "").lower() == "true"
+    native_email_verified = (
+        str(_extract_attr(native_user, "email_verified") or "").lower() == "true"
+        if native_user
+        else False
+    )
+    native_confirmed = str(native_user.get("UserStatus", "")).upper() == "CONFIRMED" if native_user else False
 
     methods: list[str] = []
     if account_id:
@@ -130,7 +142,10 @@ def handler(event, _context):
 
     inferred_methods: set[str] = set()
     for user in users:
-        inferred_methods.add(_infer_provider_from_username(user.get("Username", "")))
+        if _is_external_provider_user(user):
+            inferred_methods.add(_infer_provider_from_username(user.get("Username", "")))
+        else:
+            inferred_methods.add("password")
         inferred_methods |= _extract_providers_from_identities(_extract_attr(user, "identities"))
 
     if not methods and inferred_methods:
@@ -141,12 +156,14 @@ def handler(event, _context):
         methods = [_infer_provider_from_username(username)]
 
     unique_methods = list(dict.fromkeys(methods))
+    has_password = "password" in unique_methods
+    password_login_ready = has_password and native_confirmed and native_email_verified
 
-    if not email_verified:
+    if has_password and not password_login_ready:
         next_action = "needs_verification"
     elif unique_methods == ["password"]:
         next_action = "password"
-    elif "password" in unique_methods:
+    elif has_password:
         next_action = "choose_method"
     else:
         next_action = "social"

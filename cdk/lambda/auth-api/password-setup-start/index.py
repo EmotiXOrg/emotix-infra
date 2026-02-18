@@ -43,6 +43,7 @@ def handler(event, _context):
         return _response(400, {"message": "Email is required"})
     normalized_email = _normalize_email(email)
 
+    user_created_now = False
     try:
         cognito.sign_up(
             ClientId=USER_POOL_CLIENT_ID,
@@ -50,19 +51,45 @@ def handler(event, _context):
             Password=_random_password(),
             UserAttributes=[{"Name": "email", "Value": normalized_email}],
         )
+        user_created_now = True
     except ClientError as err:
         code = err.response.get("Error", {}).get("Code", "Unknown")
-        if code != "UsernameExistsException":
-            logger.error("sign_up failed", extra={"error": err.response})
-            return _response(400, {"message": "Unable to start email verification"})
+        if code == "LimitExceededException":
+            logger.warning("PASSWORD_SETUP_START_RATE_LIMIT_SIGN_UP email=%s", normalized_email)
+            return _response(
+                429,
+                {
+                    "message": "Too many attempts. Please wait a few minutes and try again.",
+                    "code": code,
+                },
+            )
+        # Existing account paths that should still continue to resend code.
+        if code not in {"UsernameExistsException", "AliasExistsException", "InvalidParameterException"}:
+            logger.exception("PASSWORD_SETUP_START_SIGN_UP_FAILED code=%s email=%s", code, normalized_email)
+            return _response(400, {"message": "Unable to start email verification", "code": code})
+        logger.info("PASSWORD_SETUP_START_SIGN_UP_EXISTING code=%s email=%s", code, normalized_email)
 
-    try:
-        cognito.resend_confirmation_code(
-            ClientId=USER_POOL_CLIENT_ID,
-            Username=normalized_email,
-        )
-    except ClientError:
-        # avoid enumeration leakage; keep success response
-        pass
+    # For a newly created user, sign_up already sends a confirmation code.
+    # Resend is needed only for existing unconfirmed users.
+    if not user_created_now:
+        try:
+            cognito.resend_confirmation_code(
+                ClientId=USER_POOL_CLIENT_ID,
+                Username=normalized_email,
+            )
+        except ClientError as err:
+            code = err.response.get("Error", {}).get("Code", "Unknown")
+            if code == "LimitExceededException":
+                logger.warning("PASSWORD_SETUP_START_RATE_LIMIT_RESEND email=%s", normalized_email)
+                return _response(
+                    429,
+                    {
+                        "message": "Too many attempts. Please wait a few minutes and try again.",
+                        "code": code,
+                    },
+                )
+            logger.info("PASSWORD_SETUP_START_RESEND_SKIPPED code=%s email=%s", code, normalized_email)
+            # avoid enumeration leakage; keep success response
+            pass
 
     return _response(200, {"ok": True})

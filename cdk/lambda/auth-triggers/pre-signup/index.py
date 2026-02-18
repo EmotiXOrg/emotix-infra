@@ -2,6 +2,7 @@ import logging
 import os
 import secrets
 import string
+from datetime import UTC, datetime
 
 import boto3
 from botocore.exceptions import ClientError
@@ -12,6 +13,7 @@ logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 cognito = boto3.client("cognito-idp")
 dynamodb = boto3.client("dynamodb")
 USERS_TABLE_NAME = os.environ["USERS_TABLE_NAME"]
+USER_AUTH_METHODS_TABLE_NAME = os.environ["USER_AUTH_METHODS_TABLE_NAME"]
 
 
 def _normalize_email(email: str) -> str:
@@ -44,6 +46,10 @@ def _random_temporary_password() -> str:
     return f"Aa{core}9"
 
 
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
 def _get_destination_user_by_email(user_pool_id: str, normalized_email: str) -> str | None:
     resp = cognito.list_users(
         UserPoolId=user_pool_id,
@@ -59,7 +65,7 @@ def _get_destination_user_by_email(user_pool_id: str, normalized_email: str) -> 
     return chosen.get("Username")
 
 
-def _exists_in_users_table(normalized_email: str) -> bool:
+def _users_row_by_email(normalized_email: str) -> dict | None:
     resp = dynamodb.query(
         TableName=USERS_TABLE_NAME,
         IndexName="normalized_email-index",
@@ -67,7 +73,35 @@ def _exists_in_users_table(normalized_email: str) -> bool:
         ExpressionAttributeValues={":email": {"S": normalized_email}},
         Limit=1,
     )
-    return len(resp.get("Items", [])) > 0
+    items = resp.get("Items", [])
+    if not items:
+        return None
+    return items[0]
+
+
+def _account_id_from_users_row(users_row: dict | None) -> str | None:
+    if not users_row:
+        return None
+    pk = users_row.get("pk", {}).get("S", "")
+    if isinstance(pk, str) and pk.startswith("USER#"):
+        return pk.replace("USER#", "", 1)
+    return None
+
+
+def _upsert_auth_method(account_id: str, provider_name: str, provider_subject: str, username: str) -> None:
+    now = _now_iso()
+    dynamodb.put_item(
+        TableName=USER_AUTH_METHODS_TABLE_NAME,
+        Item={
+            "pk": {"S": f"USER#{account_id}"},
+            "sk": {"S": f"METHOD#{provider_name.upper()}"},
+            "provider": {"S": provider_name},
+            "provider_sub": {"S": provider_subject},
+            "linked_at": {"S": now},
+            "verified": {"BOOL": True},
+            "username": {"S": username},
+        },
+    )
 
 
 def _auto_heal_native_user(user_pool_id: str, normalized_email: str) -> str:
@@ -113,9 +147,11 @@ def handler(event, _context):
         raise Exception("Unable to resolve social provider identity, please try again.")
 
     normalized_email = _normalize_email(email)
+    users_row = _users_row_by_email(normalized_email)
+    account_id = _account_id_from_users_row(users_row)
     destination_username = _get_destination_user_by_email(user_pool_id, normalized_email)
 
-    if not destination_username and _exists_in_users_table(normalized_email):
+    if not destination_username and users_row:
         destination_username = _auto_heal_native_user(user_pool_id, normalized_email)
 
     if not destination_username:
@@ -143,7 +179,12 @@ def handler(event, _context):
             )
         if code == "InvalidParameterException":
             # Already linked to the same destination in repeat flows; continue.
+            if account_id:
+                _upsert_auth_method(account_id, provider_name, provider_subject, event.get("userName") or "")
             return event
         raise
+
+    if account_id:
+        _upsert_auth_method(account_id, provider_name, provider_subject, event.get("userName") or "")
 
     return event
