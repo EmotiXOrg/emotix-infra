@@ -83,6 +83,7 @@ export class AuthApiStack extends cdk.Stack {
             timeout: cdk.Duration.seconds(10),
             environment: {
                 USER_AUTH_METHODS_TABLE_NAME: props.userAuthMethodsTableName,
+                USER_POOL_ID: props.userPoolId,
                 LOG_LEVEL: "INFO",
             },
         });
@@ -133,6 +134,13 @@ export class AuthApiStack extends cdk.Stack {
         authAuditLogTable.grantWriteData(setPasswordFn);
 
         userAuthMethodsTable.grantReadData(methodsFn);
+        methodsFn.addToRolePolicy(
+            new iam.PolicyStatement({
+                sid: "MethodsReadCognitoUsers",
+                actions: ["cognito-idp:ListUsers"],
+                resources: [userPool.userPoolArn],
+            })
+        );
 
         passwordSetupStartFn.addToRolePolicy(
             new iam.PolicyStatement({

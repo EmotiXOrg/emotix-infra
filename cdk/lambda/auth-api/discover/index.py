@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from collections.abc import Iterable
 
 import boto3
 
@@ -46,6 +47,26 @@ def _infer_provider_from_username(username: str) -> str:
     if prefix == "facebook":
         return "facebook"
     return prefix
+
+
+def _extract_providers_from_identities(raw_identities) -> set[str]:
+    if not raw_identities:
+        return set()
+    try:
+        identities = json.loads(raw_identities) if isinstance(raw_identities, str) else raw_identities
+    except Exception:
+        return set()
+
+    methods: set[str] = set()
+    if not isinstance(identities, Iterable):
+        return methods
+    for identity in identities:
+        if not isinstance(identity, dict):
+            continue
+        provider_name = str(identity.get("providerName", "")).strip()
+        if provider_name:
+            methods.add(_provider_to_method(provider_name))
+    return methods
 
 
 def _get_method_rows(account_id: str) -> list[dict]:
@@ -107,7 +128,16 @@ def handler(event, _context):
             for item in items
         ]
 
-    if not methods:
+    inferred_methods: set[str] = set()
+    for user in users:
+        inferred_methods.add(_infer_provider_from_username(user.get("Username", "")))
+        inferred_methods |= _extract_providers_from_identities(_extract_attr(user, "identities"))
+
+    if not methods and inferred_methods:
+        methods = list(inferred_methods)
+    elif inferred_methods:
+        methods = methods + list(inferred_methods)
+    elif not methods:
         methods = [_infer_provider_from_username(username)]
 
     unique_methods = list(dict.fromkeys(methods))

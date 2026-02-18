@@ -109,6 +109,17 @@ export class AuthStack extends cdk.Stack {
                 LOG_LEVEL: "INFO",
             },
         });
+        const postAuthenticationFn = new lambda.Function(this, "PostAuthenticationFn", {
+            runtime: lambda.Runtime.PYTHON_3_12,
+            handler: "index.handler",
+            code: lambda.Code.fromAsset(path.join(__dirname, "..", "lambda", "auth-triggers", "post-authentication")),
+            timeout: cdk.Duration.seconds(10),
+            environment: {
+                USER_AUTH_METHODS_TABLE_NAME: userAuthMethodsTable.tableName,
+                AUTH_AUDIT_LOG_TABLE_NAME: authAuditLogTable.tableName,
+                LOG_LEVEL: "INFO",
+            },
+        });
 
         /**
          * 1) Cognito User Pool
@@ -161,6 +172,7 @@ export class AuthStack extends cdk.Stack {
             lambdaTriggers: {
                 preSignUp: preSignUpExternalProviderFn,
                 postConfirmation: postConfirmationFn,
+                postAuthentication: postAuthenticationFn,
             },
         });
 
@@ -180,6 +192,15 @@ export class AuthStack extends cdk.Stack {
         usersTable.grantWriteData(postConfirmationFn);
         userAuthMethodsTable.grantWriteData(postConfirmationFn);
         authAuditLogTable.grantWriteData(postConfirmationFn);
+        userAuthMethodsTable.grantWriteData(postAuthenticationFn);
+        authAuditLogTable.grantWriteData(postAuthenticationFn);
+        postAuthenticationFn.addToRolePolicy(
+            new iam.PolicyStatement({
+                sid: "PostAuthIdentityLinking",
+                actions: ["cognito-idp:ListUsers", "cognito-idp:AdminLinkProviderForUser"],
+                resources: ["*"],
+            })
+        );
 
         /**
          * Baseline auth trigger alarms for rollout visibility.
@@ -206,6 +227,17 @@ export class AuthStack extends cdk.Stack {
             datapointsToAlarm: 1,
             treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
             alarmDescription: "Post-confirmation trigger returned errors.",
+        });
+        const postAuthenticationErrorsAlarm = new cloudwatch.Alarm(this, "PostAuthenticationTriggerErrorsAlarm", {
+            metric: postAuthenticationFn.metricErrors({
+                period: cdk.Duration.minutes(5),
+                statistic: "sum",
+            }),
+            threshold: 1,
+            evaluationPeriods: 1,
+            datapointsToAlarm: 1,
+            treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarmDescription: "Post-authentication trigger returned errors.",
         });
 
         /**
@@ -351,6 +383,7 @@ export class AuthStack extends cdk.Stack {
         new cdk.CfnOutput(this, "AuthAuditLogTableName", { value: this.authAuditLogTableName });
         new cdk.CfnOutput(this, "PreSignUpTriggerErrorsAlarmName", { value: preSignUpErrorsAlarm.alarmName });
         new cdk.CfnOutput(this, "PostConfirmationTriggerErrorsAlarmName", { value: postConfirmationErrorsAlarm.alarmName });
+        new cdk.CfnOutput(this, "PostAuthenticationTriggerErrorsAlarmName", { value: postAuthenticationErrorsAlarm.alarmName });
         new cdk.CfnOutput(this, "Region", { value: cdk.Stack.of(this).region });
     }
 }
